@@ -9,6 +9,11 @@ class GazeMLP(nn.Module):
             hidden_sizes = [64, 64]
 
         self.net = nn.Sequential()
+        # Input is formatted as left eye, right eye, and head vectors for each time step in the context window:
+        #   (*(*(x,y,z)_{eye_l}, *(x,y,z)_{eye_r}, *(x,y,z)_{head})_{t-w+1},
+        #    *(*(x,y,z)_{eye_l}, *(x,y,z)_{eye_r}, *(x,y,z)_{head})_{t-w+2},
+        #     ...
+        #    *(*(x,y,z)_{eye_l}, *(x,y,z)_{eye_r}, *(x,y,z)_{head})_{t}     )
         in_dim = 9 * window_size
         for hidden_size in hidden_sizes:
             self.net.append(nn.Linear(in_dim, hidden_size))

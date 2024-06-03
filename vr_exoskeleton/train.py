@@ -11,7 +11,7 @@ def main():
     # TODO: argparse
     test_ratio = 0.4
     val_ratio = 0.25
-    seed = 2
+    seed = 4
     window_size = 3
     drop_blinks = True
     batch_size = 64
@@ -109,9 +109,19 @@ def train(
     del Y_train
     del X_val
     del Y_val
-    X_test, Y_test = data_utils.load_X_Y(users_test, tasks, user_task_paths, **kwargs_load)
-    _, loss_test = evaluate(model, X_test, Y_test, criterion, device)
+    X_test, Y_test = data_utils.load_X_Y(
+        users_test,
+        tasks,
+        user_task_paths,
+        window_size=window_size,
+        drop_blinks=False  # Assume that this is not possible during testing.
+    )
+    Y_test_hat, loss_test = evaluate(model, X_test, Y_test, criterion, device)
     print(f'Loss on held-out test set: {loss_test:.8f}')
+    np.save(f'eval_{stamp:d}_users.npy', np.array(users_test))
+    np.save(f'eval_{stamp:d}_input.npy', X_test)
+    np.save(f'eval_{stamp:d}_head_predicted.npy', Y_test_hat)
+    np.save(f'eval_{stamp:d}_head_actual.npy', Y_test)
 
 
 def train_one_epoch(model, X, Y, optimizer, criterion, batch_size, device, rng):

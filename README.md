@@ -12,17 +12,18 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-To also run/edit the IPython notebooks:
+To also run/edit the IPython notebooks (the second command installs an IPython kernel profile based on this virtual environment):
 
 ```commandline
 pip install -r requirements-nb.txt
+python -m ipykernel install --user --name=vr-exoskeleton
 ```
 
 ## Download Data
 
-Navigate to the dataset hosted on [Figshare](https://figshare.com/articles/dataset/EyeTrackingVRDataset/25749378).
+Navigate to the [dataset hosted on Figshare](https://figshare.com/articles/dataset/EyeTrackingVRDataset/25749378).
 
-Click the 'Download all' button.
+Click the **Download all** button.
 
 Extract the content to the `data` directory:
 
@@ -44,4 +45,12 @@ Export the trained model to the [ONNX](https://pytorch.org/docs/stable/onnx.html
 
 ```commandline
 python vr-exoskeleton/export.py
+```
+
+## Notebooks
+
+From the repository root, open Jupyter Lab by:
+
+```commandline
+jupyter-lab
 ```
