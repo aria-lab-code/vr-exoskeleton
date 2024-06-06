@@ -5,7 +5,8 @@ from vr_exoskeleton import gaze_modeling
 
 def main():
     window_size = 3
-    pth_fname = 'best_val_1717435045_v0-00002057'
+    pth_fname = 'best_val_1717450374.pth'
+
     if not pth_fname.endswith('.pth'):
         pth_fname = pth_fname + '.pth'
 

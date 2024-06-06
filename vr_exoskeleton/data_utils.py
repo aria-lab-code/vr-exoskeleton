@@ -7,6 +7,8 @@ import pandas as pd
 DATA_PATH = 'data'
 N_TRIALS = 3
 
+SCORES_PATH = os.path.join(DATA_PATH, 'ScoreRecord.csv')
+
 
 def get_user_task_paths():
     user_task_paths = defaultdict(lambda: defaultdict(list))
