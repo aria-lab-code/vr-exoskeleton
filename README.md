@@ -8,7 +8,17 @@ To create a virtual environment and install dependencies from pip:
 
 ```commandline
 python -m venv venv
+```
+
+On Mac/Linux:
+```commandline
 source venv/bin/activate
+pip install -r requirements.txt
+```
+
+On Windows:
+```commandline
+call venv\Scripts\activate
 pip install -r requirements.txt
 ```
 

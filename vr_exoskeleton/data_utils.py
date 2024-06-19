@@ -4,24 +4,24 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-DATA_PATH = 'data'
-N_TRIALS = 3
+PATH_DATA = 'data'
+PATH_SCORES = os.path.join(PATH_DATA, 'ScoreRecord.csv')
 
-SCORES_PATH = os.path.join(DATA_PATH, 'ScoreRecord.csv')
+N_TRIALS = 3
 
 
 def get_user_task_paths():
     user_task_paths = defaultdict(lambda: defaultdict(list))
-    users = sorted([name for name in os.listdir(DATA_PATH)
+    users = sorted([name for name in os.listdir(PATH_DATA)
                     if name.startswith('User')],
                    key=lambda user_: int(user_[4:]))  # Numerical sort by ID number.
     for user in users:
-        files = sorted(os.listdir(os.path.join(DATA_PATH, user)))
+        files = sorted(os.listdir(os.path.join(PATH_DATA, user)))
         for file in files:
             parts = file.split('_')
             assert parts[0] == user, f'File name in folder doesn\'t match user `{user}`: {parts[0]}'
             task = parts[1]
-            path = os.path.join(DATA_PATH, user, file)
+            path = os.path.join(PATH_DATA, user, file)
             user_task_paths[user][task].append(path)
 
     keys0 = user_task_paths[users[0]].keys()
@@ -37,7 +37,7 @@ def get_user_task_paths():
     return users, tasks, user_task_paths
 
 
-def load_X_Y(users, tasks, user_task_paths, window_size=3, drop_blinks=True):
+def load_X_Y(users, tasks, user_task_paths, window_size=3, keep_blinks=False):
     if window_size <= 0:
         raise ValueError(f'Window size cannot be less than 1: {window_size:d}')
 
@@ -49,7 +49,10 @@ def load_X_Y(users, tasks, user_task_paths, window_size=3, drop_blinks=True):
                 df = pd.read_csv(user_task_paths[user][task][trial])
 
                 intervals_valid = list()
-                if drop_blinks:
+                if keep_blinks:
+                    # Use all rows, including during blinks.
+                    intervals_valid.append((0, len(df) - 1))
+                else:
                     # Filter on both eyes open.
                     df_open = df[(df['eye_in_head_left_z'] != 0.0) & (df['eye_in_head_right_z'] != 0.0)]
 
@@ -61,9 +64,6 @@ def load_X_Y(users, tasks, user_task_paths, window_size=3, drop_blinks=True):
                                 intervals_valid.append((start_open, df_open.index[i - 1]))
                                 start_open = df_open.index[i]
                         intervals_valid.append((start_open, df_open.index[-1]))
-                else:
-                    # Use all rows, including during blinks.
-                    intervals_valid.append((0, len(df) - 1))
 
                 # Create numpy array from open-eye segments.
                 for start, end in intervals_valid:

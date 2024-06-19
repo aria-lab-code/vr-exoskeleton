@@ -1,6 +1,7 @@
 .idea/
 
 data/
+output/
 venv/
 
 *.npy

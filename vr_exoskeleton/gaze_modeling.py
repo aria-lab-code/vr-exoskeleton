@@ -3,10 +3,10 @@ import torch.nn as nn
 
 class GazeMLP(nn.Module):
 
-    def __init__(self, window_size, hidden_sizes=None):
+    def __init__(self, window_size=3, hidden_sizes=None):
         super(GazeMLP, self).__init__()
         if hidden_sizes is None:
-            hidden_sizes = [64, 64]
+            hidden_sizes = list()
 
         self.net = nn.Sequential()
         # Input is formatted as left eye, right eye, and head vectors for each time step in the context window:

@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 
 import numpy as np
@@ -8,27 +9,37 @@ from vr_exoskeleton import data_utils, gaze_modeling
 
 
 def main():
-    # TODO: argparse
-    test_ratio = 0.4
-    val_ratio = 0.25
-    seed = 4
-    window_size = 3
-    drop_blinks = True
-    batch_size = 64
-    learning_rate = 0.001
-    epochs = 100
-    early_stopping_patience = 10
-    train(
-        test_ratio=test_ratio,
-        val_ratio=val_ratio,
-        seed=seed,
-        window_size=window_size,
-        drop_blinks=drop_blinks,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        epochs=epochs,
-        early_stopping_patience=early_stopping_patience,
+    """
+    Only starts from the command line when this script is run using `python vr_exoskeleton/train.py ...`.
+    """
+    parser = argparse.ArgumentParser(
+        description='Train a neural network on eye gaze and neck data.'
     )
+    # Training/test set randomization.
+    parser.add_argument('--test_ratio', default=0.4, type=float,
+                        help='Ratio of users for whose data will be set aside for evaluation.')
+    parser.add_argument('--val_ratio', default=0.25, type=float,
+                        help='Ratio of users within training set for whose data will be set aside for validation.')
+    parser.add_argument('--seed', type=int,
+                        help='Seeds the random number generator that shuffles and splits the data set.')
+    # Data set.
+    parser.add_argument('--window_size', default=3, type=int,
+                        help='Number of time steps in the past used to predict the next neck movement.')
+    parser.add_argument('--hidden_sizes', nargs='*', type=int,
+                        help='Sizes of the hidden layers of the MLP. May be empty.')
+    parser.add_argument('--keep_blinks', action='store_true',
+                        help='Flag to leave in portions of training and validation data in which the user blinked.')
+    # Optimization configuration.
+    parser.add_argument('--batch_size', default=64, type=int,
+                        help='Size of data batches during training for which the network will be optimized.')
+    parser.add_argument('--learning_rate', default=0.001, type=float,
+                        help='Optimizer learning rate.')
+    parser.add_argument('--epochs', default=100, type=int,
+                        help='Number of passes through the training set.')
+    parser.add_argument('--early_stopping_patience', '--patience', default=10, type=int,
+                        help='Number of epochs to wait for improvement on the val set before stopping early.')
+    kwargs = vars(parser.parse_args())
+    train(**kwargs)
 
 
 def train(
@@ -36,13 +47,19 @@ def train(
         val_ratio=0.25,
         seed=None,
         window_size=3,
-        drop_blinks=True,
+        keep_blinks=False,
         batch_size=64,
         learning_rate=0.001,
         epochs=100,
         early_stopping_patience=10,
 ):
+    """
+    Can be run from a notebook or another script, if desired.
+    """
+    # TODO: Add logging.
     stamp = int(time.time())
+    path_stamp = os.path.join('output', str(stamp))
+    os.makedirs(path_stamp, exist_ok=True)
 
     # Seed random number generator. Used for splitting/shuffling data set.
     rng = np.random.default_rng(seed=seed)
@@ -59,12 +76,12 @@ def train(
 
     # Shuffle and split users.
     perm = rng.permutation(len(users))  # Shuffle indices.
-    n_users_test = int(len(users) * test_ratio)
+    n_users_test = max(0, min(len(users), int(len(users) * test_ratio)))  # Bound in [0, n].
     if n_users_test == 0:
         raise ValueError(f'Parameter `test_ratio` is too small: {test_ratio}')
     if n_users_test == len(users):
         raise ValueError(f'Parameter `test_ratio` is too large: {test_ratio}')
-    n_users_val = int(len(users) * (1.0 - test_ratio) * val_ratio)
+    n_users_val = int((len(users) - n_users_test) * val_ratio)
     users_val = [users[i] for i in perm[:n_users_val]]
     users_train = [users[i] for i in perm[n_users_val:-n_users_test]]
     users_test = [users[i] for i in perm[-n_users_test:]]
@@ -73,7 +90,7 @@ def train(
     print(f'Evaluating with users ({len(users_test)}): {users_test}')
 
     # Read training files, create data set.
-    kwargs_load = {'window_size': window_size, 'drop_blinks': drop_blinks}
+    kwargs_load = {'window_size': window_size, 'keep_blinks': keep_blinks}
     X_train, Y_train = data_utils.load_X_Y(users_train, tasks, user_task_paths, **kwargs_load)
     X_val, Y_val = data_utils.load_X_Y(users_val, tasks, user_task_paths, **kwargs_load)
     print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
@@ -87,6 +104,7 @@ def train(
     losses_train = list()
     losses_val = list()
     loss_val_min = None
+    path_val_best = os.path.join(path_stamp, 'val_best.pth')
     early_stopping_counter = 0
     for epoch in range(epochs):
         loss_train = train_one_epoch(model, X_train, Y_train, optimizer, criterion, batch_size, device, rng)
@@ -98,7 +116,7 @@ def train(
         if loss_val_min is None or loss_val < loss_val_min:
             loss_val_min = loss_val
             early_stopping_counter = 0
-            torch.save(model.state_dict(), f'best_val_{stamp:d}.pth')
+            torch.save(model.state_dict(), path_val_best)
         else:
             early_stopping_counter += 1
             if early_stopping_counter == early_stopping_patience:
@@ -114,14 +132,14 @@ def train(
         tasks,
         user_task_paths,
         window_size=window_size,
-        drop_blinks=False  # Assume that this is not possible during testing.
+        keep_blinks=True  # Assume that is not possible to ignore blinks during testing.
     )
     Y_test_hat, loss_test = evaluate(model, X_test, Y_test, criterion, device)
     print(f'Loss on held-out test set: {loss_test:.8f}')
-    np.save(f'eval_{stamp:d}_users.npy', np.array(users_test))
-    np.save(f'eval_{stamp:d}_input.npy', X_test)
-    np.save(f'eval_{stamp:d}_head_predicted.npy', Y_test_hat)
-    np.save(f'eval_{stamp:d}_head_actual.npy', Y_test)
+    np.save(os.path.join(path_stamp, 'test_users.npy'), np.array(users_test))
+    np.save(os.path.join(path_stamp, 'test_input.npy'), X_test)
+    np.save(os.path.join(path_stamp, 'test_head_predicted.npy'), Y_test_hat)
+    np.save(os.path.join(path_stamp, 'test_head_actual.npy'), Y_test)
 
 
 def train_one_epoch(model, X, Y, optimizer, criterion, batch_size, device, rng):
