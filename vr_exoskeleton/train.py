@@ -47,6 +47,7 @@ def train(
         val_ratio=0.25,
         seed=None,
         window_size=3,
+        hidden_sizes=None,
         keep_blinks=False,
         batch_size=64,
         learning_rate=0.001,
@@ -56,6 +57,9 @@ def train(
     """
     Can be run from a notebook or another script, if desired.
     """
+    if hidden_sizes is None:
+        hidden_sizes = list()
+
     # TODO: Add logging.
     stamp = int(time.time())
     path_stamp = os.path.join('output', str(stamp))
@@ -96,7 +100,7 @@ def train(
     print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
 
     # Create model.
-    model = gaze_modeling.GazeMLP(window_size).to(device)
+    model = gaze_modeling.GazeMLP(window_size=window_size, hidden_sizes=hidden_sizes).to(device)
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 

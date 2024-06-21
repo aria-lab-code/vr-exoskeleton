@@ -4,8 +4,4 @@ data/
 output/
 venv/
 
-*.npy
-*.onnx
-*.pth
-
 **/.ipynb_checkpoints/
