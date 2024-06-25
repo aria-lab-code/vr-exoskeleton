@@ -29,6 +29,8 @@ def main():
                         help='Sizes of the hidden layers of the MLP. May be empty.')
     parser.add_argument('--keep_blinks', action='store_true',
                         help='Flag to leave in portions of training and validation data in which the user blinked.')
+    parser.add_argument('--task_name', nargs='+',
+                        help='Name of the specific task chosen. ')
     # Optimization configuration.
     parser.add_argument('--batch_size', default=64, type=int,
                         help='Size of data batches during training for which the network will be optimized.')
@@ -53,6 +55,7 @@ def train(
         learning_rate=0.001,
         epochs=100,
         early_stopping_patience=10,
+        task_name=None
 ):
     """
     Can be run from a notebook or another script, if desired.
@@ -77,6 +80,9 @@ def train(
     # Load meta data.
     users, tasks, user_task_paths = data_utils.get_user_task_paths()
     print(f'Total users: {len(users)}')
+    if task_name is None:
+        task_name = tasks
+    print(f'Tasks: {task_name}')
 
     # Shuffle and split users.
     perm = rng.permutation(len(users))  # Shuffle indices.
@@ -95,8 +101,8 @@ def train(
 
     # Read training files, create data set.
     kwargs_load = {'window_size': window_size, 'keep_blinks': keep_blinks}
-    X_train, Y_train = data_utils.load_X_Y(users_train, tasks, user_task_paths, **kwargs_load)
-    X_val, Y_val = data_utils.load_X_Y(users_val, tasks, user_task_paths, **kwargs_load)
+    X_train, Y_train = data_utils.load_X_Y(users_train, task_name, user_task_paths, **kwargs_load)
+    X_val, Y_val = data_utils.load_X_Y(users_val, task_name, user_task_paths, **kwargs_load)
     print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
 
     # Create model.
@@ -133,7 +139,7 @@ def train(
     del Y_val
     X_test, Y_test = data_utils.load_X_Y(
         users_test,
-        tasks,
+        task_name,
         user_task_paths,
         window_size=window_size,
         keep_blinks=True  # Assume that is not possible to ignore blinks during testing.
