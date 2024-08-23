@@ -29,6 +29,8 @@ def main():
                         help='Sizes of the hidden layers of the MLP. May be empty.')
     parser.add_argument('--keep_blinks', action='store_true',
                         help='Flag to leave in portions of training and validation data in which the user blinked.')
+    parser.add_argument('--drop_gaze_z', action='store_true',
+                        help='Flag to drop the z-dimension of the left and right gaze vectors.')
     parser.add_argument('--task_name', nargs='+',
                         help='Name of the specific task chosen. ')
     # Optimization configuration.
@@ -38,7 +40,7 @@ def main():
                         help='Optimizer learning rate.')
     parser.add_argument('--epochs', default=100, type=int,
                         help='Number of passes through the training set.')
-    parser.add_argument('--early_stopping_patience', '--patience', default=10, type=int,
+    parser.add_argument('--early_stopping_patience', '--patience', default=5, type=int,
                         help='Number of epochs to wait for improvement on the val set before stopping early.')
     kwargs = vars(parser.parse_args())
     train(**kwargs)
@@ -51,10 +53,11 @@ def train(
         window_size=3,
         hidden_sizes=None,
         keep_blinks=False,
+        drop_gaze_z=False,
         batch_size=64,
         learning_rate=0.001,
         epochs=100,
-        early_stopping_patience=10,
+        early_stopping_patience=5,
         task_name=None
 ):
     """
@@ -67,9 +70,11 @@ def train(
     stamp = int(time.time())
     path_stamp = os.path.join('output', str(stamp))
     os.makedirs(path_stamp, exist_ok=True)
+    print(f'Saving to: {path_stamp}')
 
     # Seed random number generator. Used for splitting/shuffling data set.
     rng = np.random.default_rng(seed=seed)
+    print(f'Using seed: {seed}')
 
     if torch.cuda.is_available():
         device = torch.device('cuda')  # Use the default GPU device
@@ -100,13 +105,21 @@ def train(
     print(f'Evaluating with users ({len(users_test)}): {users_test}')
 
     # Read training files, create data set.
-    kwargs_load = {'window_size': window_size, 'keep_blinks': keep_blinks}
+    kwargs_load = {
+        'window_size': window_size,
+        'keep_blinks': keep_blinks,
+        'drop_gaze_z': drop_gaze_z
+    }
     X_train, Y_train = data_utils.load_X_Y(users_train, task_name, user_task_paths, **kwargs_load)
     X_val, Y_val = data_utils.load_X_Y(users_val, task_name, user_task_paths, **kwargs_load)
     print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
 
     # Create model.
-    model = gaze_modeling.GazeMLP(window_size=window_size, hidden_sizes=hidden_sizes).to(device)
+    model = gaze_modeling.GazeMLP(
+        window_size=window_size,
+        hidden_sizes=hidden_sizes,
+        drop_gaze_z=drop_gaze_z
+    ).to(device)
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -142,7 +155,8 @@ def train(
         task_name,
         user_task_paths,
         window_size=window_size,
-        keep_blinks=True  # Assume that is not possible to ignore blinks during testing.
+        keep_blinks=True,  # Assume that is not possible to ignore blinks during testing.
+        drop_gaze_z=drop_gaze_z
     )
     Y_test_hat, loss_test = evaluate(model, X_test, Y_test, criterion, device)
     print(f'Loss on held-out test set: {loss_test:.8f}')
