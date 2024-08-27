@@ -10,10 +10,10 @@ class GazeMLP(nn.Module):
 
         self.net = nn.Sequential()
         # Input is formatted as left eye, right eye, and head vectors for each time step in the context window:
-        #   (*(*(x,y,z)_{eye_l}, *(x,y,z)_{eye_r}, *(x,y,z)_{head})_{t-w+1},
-        #    *(*(x,y,z)_{eye_l}, *(x,y,z)_{eye_r}, *(x,y,z)_{head})_{t-w+2},
+        #   (*(*(x,y[,z])_{eye_l}, *(x,y[,z])_{eye_r}, *(x,y,z)_{head})_{t-w+1},
+        #    *(*(x,y[,z])_{eye_l}, *(x,y[,z])_{eye_r}, *(x,y,z)_{head})_{t-w+2},
         #     ...
-        #    *(*(x,y,z)_{eye_l}, *(x,y,z)_{eye_r}, *(x,y,z)_{head})_{t}     )
+        #    *(*(x,y[,z])_{eye_l}, *(x,y[,z])_{eye_r}, *(x,y,z)_{head})_{t}     )
         instance_size = 9
         if drop_gaze_z:
             instance_size = 7

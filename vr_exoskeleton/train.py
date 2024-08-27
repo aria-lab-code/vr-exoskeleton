@@ -15,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser(
         description='Train a neural network on eye gaze and neck data.'
     )
+    parser.add_argument('--run_name', type=str,
+                        help='Optional name to append to output directory.')
     # Training/test set randomization.
     parser.add_argument('--test_ratio', default=0.4, type=float,
                         help='Ratio of users for whose data will be set aside for evaluation.')
@@ -25,14 +27,16 @@ def main():
     # Data set.
     parser.add_argument('--window_size', default=3, type=int,
                         help='Number of time steps in the past used to predict the next neck movement.')
+    parser.add_argument('--downsampling_rate', default=1, type=int,
+                        help='Rate by which data points will be down-sampled from the actual rate of 120Hz.')
     parser.add_argument('--hidden_sizes', nargs='*', type=int,
                         help='Sizes of the hidden layers of the MLP. May be empty.')
     parser.add_argument('--keep_blinks', action='store_true',
                         help='Flag to leave in portions of training and validation data in which the user blinked.')
     parser.add_argument('--drop_gaze_z', action='store_true',
                         help='Flag to drop the z-dimension of the left and right gaze vectors.')
-    parser.add_argument('--task_name', nargs='+',
-                        help='Name of the specific task chosen. ')
+    parser.add_argument('--task_names', nargs='+',
+                        help='Name of the specific task(s) chosen.')
     # Optimization configuration.
     parser.add_argument('--batch_size', default=64, type=int,
                         help='Size of data batches during training for which the network will be optimized.')
@@ -47,18 +51,20 @@ def main():
 
 
 def train(
+        run_name=None,
         test_ratio=0.4,
         val_ratio=0.25,
         seed=None,
         window_size=3,
+        downsampling_rate=1,
         hidden_sizes=None,
         keep_blinks=False,
         drop_gaze_z=False,
+        task_names=None,
         batch_size=64,
         learning_rate=0.001,
         epochs=100,
         early_stopping_patience=5,
-        task_name=None
 ):
     """
     Can be run from a notebook or another script, if desired.
@@ -67,8 +73,10 @@ def train(
         hidden_sizes = list()
 
     # TODO: Add logging.
-    stamp = int(time.time())
-    path_stamp = os.path.join('output', str(stamp))
+    stamp = str(int(time.time()))
+    if run_name is not None:
+        stamp += '_' + run_name
+    path_stamp = os.path.join('output', stamp)
     os.makedirs(path_stamp, exist_ok=True)
     print(f'Saving to: {path_stamp}')
 
@@ -85,9 +93,9 @@ def train(
     # Load meta data.
     users, tasks, user_task_paths = data_utils.get_user_task_paths()
     print(f'Total users: {len(users)}')
-    if task_name is None:
-        task_name = tasks
-    print(f'Tasks: {task_name}')
+    if task_names is None:
+        task_names = tasks
+    print(f'Tasks: {task_names}')
 
     # Shuffle and split users.
     perm = rng.permutation(len(users))  # Shuffle indices.
@@ -107,11 +115,12 @@ def train(
     # Read training files, create data set.
     kwargs_load = {
         'window_size': window_size,
+        'downsampling_rate': downsampling_rate,
         'keep_blinks': keep_blinks,
         'drop_gaze_z': drop_gaze_z
     }
-    X_train, Y_train = data_utils.load_X_Y(users_train, task_name, user_task_paths, **kwargs_load)
-    X_val, Y_val = data_utils.load_X_Y(users_val, task_name, user_task_paths, **kwargs_load)
+    X_train, Y_train = data_utils.load_X_Y(users_train, task_names, user_task_paths, **kwargs_load)
+    X_val, Y_val = data_utils.load_X_Y(users_val, task_names, user_task_paths, **kwargs_load)
     print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
 
     # Create model.
@@ -152,9 +161,10 @@ def train(
     del Y_val
     X_test, Y_test = data_utils.load_X_Y(
         users_test,
-        task_name,
+        task_names,
         user_task_paths,
         window_size=window_size,
+        downsampling_rate=downsampling_rate,
         keep_blinks=True,  # Assume that is not possible to ignore blinks during testing.
         drop_gaze_z=drop_gaze_z
     )

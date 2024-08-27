@@ -37,9 +37,11 @@ def get_user_task_paths():
     return users, tasks, user_task_paths
 
 
-def load_X_Y(users, tasks, user_task_paths, window_size=3, keep_blinks=False, drop_gaze_z=False):
+def load_X_Y(users, tasks, user_task_paths, window_size=3, downsampling_rate=1, keep_blinks=False, drop_gaze_z=False):
     if window_size <= 0:
         raise ValueError(f'Window size cannot be less than 1: {window_size:d}')
+    if downsampling_rate <= 0:
+        raise ValueError(f'Down-sample rate cannot be less than 1: {downsampling_rate:d}')
 
     segments_X = list()
     segments_Y = list()
@@ -72,25 +74,29 @@ def load_X_Y(users, tasks, user_task_paths, window_size=3, keep_blinks=False, dr
 
                 # Create numpy array from open-eye segments.
                 for start, end in intervals_valid:
-                    # Skip segments with a very short duration.
-                    if end + 1 - start <= window_size:
-                        continue
+                    for shift in range(downsampling_rate):
+                        # Skip segments with a duration that doesn't fit an entire window.
+                        if end - start - shift < window_size * downsampling_rate:
+                            continue
 
-                    X = np.zeros((end + 1 - start - window_size, instance_size * window_size), np.float32)
-                    for w in range(window_size):
-                        # The entire range starting from `start` accounts for the first
-                        # [9|7]-value-wide 'column' of X. Increment the starting point of the
-                        # window via `w` and fill in the next [9|7]-value-wide 'column' of X.
-                        #
-                        # X[:                      Every row.
-                        #    , 9 * w:9 * w + 9]    The w-th [9|7]-value-wide 'column' - [6|4] eye gaze, 3 head values.
-                        #
-                        # df.iloc[start + w:end + 1 - window_size + w]    The indices of the ORIGINAL dataframe.
-                        X[:, instance_size * w:instance_size * w + instance_size] = \
-                            df.iloc[start + w:end + 1 - window_size + w].to_numpy()
-                    segments_X.append(X)
+                        # Consider only every `downsampling_rate` rows, if applicable.
+                        data = df.iloc[start + shift:end + 1:downsampling_rate].to_numpy()
 
-                    # All head values from index `start + window_size` until the end.
-                    Y = df.iloc[start + window_size:end + 1, -3:].to_numpy().astype(np.float32)
-                    segments_Y.append(Y)
+                        X = np.zeros((len(data) - window_size, instance_size * window_size), np.float32)
+                        for w in range(window_size):
+                            # The entire range starting from `start` accounts for the first
+                            # [9|7]-value-wide 'column' of X. Increment the starting point of the
+                            # window via `w` and fill in the next [9|7]-value-wide 'column' of X.
+                            #
+                            # X[:                            Every row.
+                            #    , w * i_s:(w + 1) * i_s]    The w-th [9|7]-value-wide 'column',
+                            #                                  i.e., [6|4] eye gaze, 3 head values.
+                            #
+                            # data[w:-window_size + w]    Exactly `n-window_size` data points, starting from index `w`.
+                            X[:, w * instance_size:(w + 1) * instance_size] = data[w:-window_size + w]
+                        segments_X.append(X)
+
+                        # All head values (`-3:`) from `window_size` until the end.
+                        Y = data[window_size:, -3:].astype(np.float32)
+                        segments_Y.append(Y)
     return np.concatenate(segments_X, axis=0), np.concatenate(segments_Y, axis=0)
