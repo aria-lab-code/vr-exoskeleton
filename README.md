@@ -18,7 +18,7 @@ pip install -r requirements.txt
 
 On Windows:
 ```commandline
-call venv\Scripts\activate
+venv\Scripts\activate
 pip install -r requirements.txt
 ```
 

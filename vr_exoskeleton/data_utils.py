@@ -37,14 +37,22 @@ def get_user_task_paths():
     return users, tasks, user_task_paths
 
 
-def load_X_Y(users, tasks, user_task_paths, window_size=3, downsampling_rate=1, keep_blinks=False, drop_gaze_z=False):
+def load_sequences_X_Y(
+        users,
+        tasks,
+        user_task_paths,
+        window_size=3,
+        downsampling_rate=1,
+        drop_blinks=False,
+        drop_gaze_z=False,
+):
     if window_size <= 0:
         raise ValueError(f'Window size cannot be less than 1: {window_size:d}')
     if downsampling_rate <= 0:
         raise ValueError(f'Down-sample rate cannot be less than 1: {downsampling_rate:d}')
 
-    segments_X = list()
-    segments_Y = list()
+    sequences_X = list()
+    sequences_Y = list()
     for user in users:
         for task in tasks:
             for trial in range(N_TRIALS):
@@ -52,7 +60,7 @@ def load_X_Y(users, tasks, user_task_paths, window_size=3, downsampling_rate=1, 
                 df = df.drop(columns=['time_stamp(ms)'])
 
                 intervals_valid = list()
-                if keep_blinks or drop_gaze_z:
+                if not drop_blinks or drop_gaze_z:
                     # Use all rows, including during blinks.
                     intervals_valid.append((0, len(df) - 1))
                 else:
@@ -94,9 +102,10 @@ def load_X_Y(users, tasks, user_task_paths, window_size=3, downsampling_rate=1, 
                             #
                             # data[w:-window_size + w]    Exactly `n-window_size` data points, starting from index `w`.
                             X[:, w * instance_size:(w + 1) * instance_size] = data[w:-window_size + w]
-                        segments_X.append(X)
+                        sequences_X.append(X)
 
                         # All head values (`-3:`) from `window_size` until the end.
                         Y = data[window_size:, -3:].astype(np.float32)
-                        segments_Y.append(Y)
-    return np.concatenate(segments_X, axis=0), np.concatenate(segments_Y, axis=0)
+                        sequences_Y.append(Y)
+
+    return sequences_X, sequences_Y
