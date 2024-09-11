@@ -57,6 +57,8 @@ Export the trained model to the [ONNX](https://pytorch.org/docs/stable/onnx.html
 python vr-exoskeleton/export.py
 ```
 
+You can check that the model exported with proper dimensions and input/output layer names via [Netron](https://netron.app).
+
 ## Notebooks
 
 From the repository root, open Jupyter Lab by:

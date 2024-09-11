@@ -28,8 +28,6 @@ def main():
     parser.add_argument('--seed', type=int,
                         help='Seeds the random number generator that shuffles and splits the data set.')
     # Data set.
-    parser.add_argument('--window_size', default=3, type=int,
-                        help='Number of time steps in the past used to predict the next neck movement.')
     parser.add_argument('--downsampling_rate', default=1, type=int,
                         help='Rate by which data points will be down-sampled from the actual rate of 120Hz.')
     parser.add_argument('--drop_blinks', action='store_true',
@@ -39,8 +37,10 @@ def main():
     parser.add_argument('--task_names', nargs='+',
                         help='Name of the specific task(s) chosen.')
     # Model configuration.
+    parser.add_argument('--mlp_window_size', default=3, type=int,
+                        help='MLP only. Number of time steps in the past used to predict the next neck movement.')
     parser.add_argument('--hidden_sizes', nargs='*', type=int,
-                        help='Sizes of the hidden layers of the MLP OR size of the hidden layer of the LSTM.')
+                        help='Sizes of the hidden layers.')
     parser.add_argument('--seq_len_max', default=1024, type=int,
                         help='LSTM only. Maximum sequence length.')
     # Optimization configuration.
@@ -62,11 +62,11 @@ def train(
         test_ratio=0.4,
         val_ratio=0.25,
         seed=None,
-        window_size=3,
         downsampling_rate=1,
         drop_blinks=False,
         drop_gaze_z=False,
         task_names=None,
+        mlp_window_size=3,
         hidden_sizes=None,
         seq_len_max=1024,
         batch_size=64,
@@ -81,16 +81,18 @@ def train(
         hidden_sizes = list()
 
     # Create model.
+    instance_size = 7 if drop_gaze_z else 9
     if model_type == 'mlp':
         model = gaze_modeling.GazeMLP(
-            window_size=window_size,
+            instance_size,
+            window_size=mlp_window_size,
             hidden_sizes=hidden_sizes,
-            drop_gaze_z=drop_gaze_z,
         )
+        window_size = mlp_window_size
     elif model_type == 'lstm':
         model = gaze_modeling.GazeLSTM(
-            hidden_size=hidden_sizes[0] if len(hidden_sizes) > 0 else None,
-            drop_gaze_z=drop_gaze_z,
+            instance_size,
+            hidden_sizes=hidden_sizes,
         )
         window_size = 1
     else:
@@ -100,6 +102,8 @@ def train(
     stamp = str(int(time.time())) + '_' + model_type
     if run_name is not None:
         stamp += '_' + run_name
+    if seed is not None:
+        stamp += '_s' + str(seed)
     path_stamp = os.path.join('output', stamp)
     os.makedirs(path_stamp, exist_ok=True)
     print(f'Saving to: {path_stamp}')
@@ -144,7 +148,7 @@ def train(
     if model_type in {'lstm'}:
         X_train, Y_train = to_time_series_dict(sequences_X_train, sequences_Y_train, seq_len_max)
         X_val, Y_val = to_time_series_dict(sequences_X_val, sequences_Y_val, seq_len_max)
-        print('X_train sequence lengths: {}'.format({length: len(sequences) for length, sequences in X_train.items()}))
+        print('X_train sequence lengths: {}'.format({length: sequences.shape[1] for length, sequences in X_train.items()}))
     else:
         X_train, Y_train = np.concatenate(sequences_X_train, axis=0), np.concatenate(sequences_Y_train, axis=0)
         X_val, Y_val = np.concatenate(sequences_X_val, axis=0), np.concatenate(sequences_Y_val, axis=0)
@@ -216,7 +220,6 @@ def train(
 def to_time_series_dict(sequences_X, sequences_Y, seq_len_max):
     X, Y = defaultdict(list), defaultdict(list)
     for sequence_X, sequence_Y in zip(sequences_X, sequences_Y):
-        assert len(sequence_X) == len(sequence_Y)
         if len(sequence_X) <= seq_len_max:
             X[len(sequence_X)].append(sequence_X)
             Y[len(sequence_Y)].append(sequence_Y)
@@ -228,8 +231,17 @@ def to_time_series_dict(sequences_X, sequences_Y, seq_len_max):
                 X[len(chunk_X)].append(chunk_X)
                 Y[len(chunk_Y)].append(chunk_Y)
                 i += seq_len_max
-    return ({length: np.concatenate(chunks, axis=0) for length, chunks in X.items()},
-            {length: np.concatenate(chunks, axis=0) for length, chunks in Y.items()})
+
+    # `transpose()` is to provide axes as:
+    #  (sequence_length, batch_size, instance_size)
+    # instead of:
+    #  (batch_size, sequence_length, instance_size)
+    # in order to comply with `LSTM(batch_first=False)`.
+    X = {length: np.array(chunks).transpose(1, 0, 2)
+         for length, chunks in X.items()}  # (length, N_{length}, instance_size) for each `length`.
+    Y = {length: np.array(chunks).transpose(1, 0, 2)
+         for length, chunks in Y.items()}  # (length, N_{length}, output_size=3) for each `length`.
+    return X, Y
 
 
 def train_one_epoch(model, X, Y, optimizer, criterion, batch_size, device, rng):
@@ -237,62 +249,80 @@ def train_one_epoch(model, X, Y, optimizer, criterion, batch_size, device, rng):
     order = rng.permutation(n)  # Shuffle.
     i = 0
     batch_losses = list()
+    batch_sizes = list()
     while i < n:
         optimizer.zero_grad()
         X_batch = torch.tensor(X[order[i:i + batch_size]]).to(device)
-        Y_batch_hat = model(X_batch)
+        Y_hat_batch = model(X_batch)
         Y_batch = torch.tensor(Y[order[i:i + batch_size]]).to(device)
-        loss = criterion(Y_batch_hat, Y_batch)
+        loss = criterion(Y_hat_batch, Y_batch)
         loss.backward()
         optimizer.step()
-        batch_losses.append(np.mean(loss.detach().cpu().numpy()))
+        batch_losses.append(loss.detach().cpu().numpy())
+        batch_sizes.append(X_batch.shape[0])
         i += batch_size
-    return np.mean(batch_losses)
+
+    return np.average(batch_losses, weights=batch_sizes)
 
 
 def train_one_epoch_recurrent(model, X, Y, optimizer, criterion, batch_size, device, rng):
-    batch_losses = list()
+    losses = list()
+    sizes = list()
     for length in X.keys():
-        n = X[length].shape[0]
+        batch_losses = list()
+        batch_sizes = list()
+        n = X[length].shape[1]
         order = rng.permutation(n)  # Shuffle.
         i = 0
         while i < n:
             optimizer.zero_grad()
-            X_batch = torch.tensor(X[length][order[i:i + batch_size]]).to(device)
-            Y_batch_hat, _ = model(X_batch)
-            Y_batch = torch.tensor(Y[length][order[i:i + batch_size]]).to(device)
-            loss = criterion(Y_batch_hat, Y_batch)
+            X_batch = torch.tensor(X[length][:, order[i:i + batch_size]]).to(device)
+            Y_hat_batch, _, _ = model(X_batch)
+            Y_batch = torch.tensor(Y[length][:, order[i:i + batch_size]]).to(device)
+            loss = criterion(Y_hat_batch, Y_batch)
             loss.backward()
             optimizer.step()
-            batch_losses.append(np.mean(loss.detach().cpu().numpy()))
+            batch_losses.append(loss.detach().cpu().numpy())
+            batch_sizes.append(X_batch.shape[1])
             i += batch_size
-    return np.mean(batch_losses)
+        losses.append(np.average(batch_losses, weights=batch_sizes))
+        sizes.append(n)
+
+    return np.average(losses, weights=sizes)
 
 
 def evaluate(model, X, Y, criterion, device):
     with torch.no_grad():
         Y_hat = model(torch.tensor(X).to(device))
-        loss = criterion(Y_hat, torch.tensor(Y).to(device))
-    return Y_hat.detach().cpu().numpy(), np.mean(loss.detach().cpu().numpy())
+    loss = criterion(Y_hat, torch.tensor(Y).to(device))
+    return Y_hat.detach().cpu().numpy(), loss.detach().cpu().numpy()
 
 
 def evaluate_recurrent(model, X, Y, criterion, batch_size, device):
-    batch_Y_hats = list()
-    batch_losses = list()
-    with torch.no_grad():
-        for length in X.keys():
-            n = X[length].shape[0]
-            i = 0
-            while i < n:
-                X_batch = torch.tensor(X[length][i:i + batch_size]).to(device)
-                Y_batch_hat, _ = model(X_batch)
-                Y_batch = torch.tensor(Y[length][i:i + batch_size]).to(device)
-                loss = criterion(Y_batch_hat, Y_batch)
-                batch_Y_hats.append(Y_batch_hat.detach().cpu().numpy())
-                batch_losses.append(loss.detach().cpu().numpy())
-                i += batch_size
-    Y_hats = np.concatenate(batch_Y_hats, axis=0)
-    return Y_hats, np.mean(batch_losses)
+    Y_hat = dict()
+    losses = list()
+    sizes = list()
+    for length in X.keys():
+        batch_Y_hat = list()
+        batch_losses = list()
+        batch_sizes = list()
+        n = X[length].shape[1]
+        i = 0
+        while i < n:
+            X_batch = torch.tensor(X[length][:, i:i + batch_size]).to(device)
+            with torch.no_grad():
+                Y_hat_batch, _, _ = model(X_batch)
+            Y_batch = torch.tensor(Y[length][:, i:i + batch_size]).to(device)
+            loss = criterion(Y_hat_batch, Y_batch)
+            batch_Y_hat.append(Y_hat_batch.detach().cpu().numpy())
+            batch_losses.append(loss.detach().cpu().numpy())
+            batch_sizes.append(X_batch.shape[1])
+            i += batch_size
+        Y_hat[length] = np.concatenate(batch_Y_hat, axis=1)
+        losses.append(np.average(batch_losses, weights=batch_sizes))
+        sizes.append(n)
+
+    return Y_hat, np.average(losses, weights=sizes)
 
 
 if __name__ == '__main__':
