@@ -45,6 +45,9 @@ def load_sequences_X_Y(
         downsampling_rate=1,
         drop_blinks=False,
         drop_gaze_z=False,
+        use_relative_positions=False,
+        use_update_frames=False,
+        drop_head_input=False,
 ):
     if window_size <= 0:
         raise ValueError(f'Window size cannot be less than 1: {window_size:d}')
@@ -58,6 +61,13 @@ def load_sequences_X_Y(
             for trial in range(N_TRIALS):
                 df = pd.read_csv(user_task_paths[user][task][trial])
                 df = df.drop(columns=['time_stamp(ms)'])
+
+                if use_update_frames:
+                    update_indices = list()
+                    for i in range(1, len(df)):
+                        if any(v != v_prev for v, v_prev in zip(df.iloc[i, -2:], df.iloc[i - 1, -2:])):
+                            update_indices.append(i)
+                    df = df.iloc[update_indices]
 
                 intervals_valid = list()
                 if not drop_blinks or drop_gaze_z:
@@ -79,6 +89,8 @@ def load_sequences_X_Y(
                 if drop_gaze_z:
                     df = df.drop(columns=['eye_in_head_left_z', 'eye_in_head_right_z'])
                 instance_size = len(df.columns)
+                if drop_head_input:
+                    instance_size -= 3  # Don't include head_[x|y|z] in `X`.
 
                 # Create numpy array from open-eye segments.
                 for start, end in intervals_valid:
@@ -90,18 +102,25 @@ def load_sequences_X_Y(
                         # Consider only every `downsampling_rate` rows, if applicable.
                         data = df.iloc[start + shift:end + 1:downsampling_rate].to_numpy()
 
+                        # Use delta between adjacent positions.
+                        if use_relative_positions:
+                            data = data[1:] - data[:-1]
+
                         X = np.zeros((len(data) - window_size, instance_size * window_size), np.float32)
                         for w in range(window_size):
                             # The entire range starting from `start` accounts for the first
-                            # [9|7]-value-wide 'column' of X. Increment the starting point of the
-                            # window via `w` and fill in the next [9|7]-value-wide 'column' of X.
+                            # [9|7|6|4]-value-wide 'column' of X. Increment the starting point of the
+                            # window via `w` and fill in the next [9|7|6|4]-value-wide 'column' of X.
                             #
                             # X[:                            Every row.
-                            #    , w * i_s:(w + 1) * i_s]    The w-th [9|7]-value-wide 'column',
-                            #                                  i.e., [6|4] eye gaze, 3 head values.
+                            #    , w * i_s:(w + 1) * i_s]    The w-th [9|7|6|4]-value-wide 'column',
+                            #                                  i.e., [6|4] eye gaze, [3|0] head values.
                             #
-                            # data[w:-window_size + w]    Exactly `n-window_size` data points, starting from index `w`.
-                            X[:, w * instance_size:(w + 1) * instance_size] = data[w:-window_size + w]
+                            # data[w:-window_size + w           Exactly `n - window_size` data points,
+                            #                                     starting from index `w`.
+                            #                        , :i_s]    First `instance_size` columns
+                            #                                     (may exclude head).
+                            X[:, w * instance_size:(w + 1) * instance_size] = data[w:-window_size + w, :instance_size]
                         sequences_X.append(X)
 
                         # All head values (`-3:`) from `window_size` until the end.

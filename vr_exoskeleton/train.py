@@ -1,7 +1,6 @@
 import argparse
 import os
 import time
-from collections import defaultdict
 
 import numpy as np
 import torch
@@ -21,28 +20,35 @@ def main():
     parser.add_argument('--run_name', type=str,
                         help='Optional name to append to output directory.')
     # Training/test set randomization.
-    parser.add_argument('--test_ratio', default=0.4, type=float,
+    parser.add_argument('--test_ratio', default=0.25, type=float,
                         help='Ratio of users for whose data will be set aside for evaluation.')
-    parser.add_argument('--val_ratio', default=0.25, type=float,
+    parser.add_argument('--val_ratio', default=0.2, type=float,
                         help='Ratio of users within training set for whose data will be set aside for validation.')
     parser.add_argument('--seed', type=int,
                         help='Seeds the random number generator that shuffles and splits the data set.')
     # Data set.
+    parser.add_argument('--task_names', nargs='+',
+                        help='Name of the specific task(s) chosen.')
     parser.add_argument('--downsampling_rate', default=1, type=int,
                         help='Rate by which data points will be down-sampled from the actual rate of 120Hz.')
     parser.add_argument('--drop_blinks', action='store_true',
                         help='Flag to exclude portions of training and validation data in which the user blinked.')
     parser.add_argument('--drop_gaze_z', action='store_true',
                         help='Flag to drop the z-dimension of the left and right gaze vectors.')
-    parser.add_argument('--task_names', nargs='+',
-                        help='Name of the specific task(s) chosen.')
+    parser.add_argument('--use_relative_positions', action='store_true',
+                        help='Flag to model relative eye and head positions instead of absolute ones.'
+                             ' Applies AFTER down-sampling, if also used.')
+    parser.add_argument('--use_update_frames', action='store_true',
+                        help='Flag to filter by the game\'s frame rate (~90Hz) instead of the eye tracker\'s (120Hz)')
+    parser.add_argument('--drop_head_input', action='store_true',
+                        help='Flag to remove head position data as input, hypothetically improving inference.')
     # Model configuration.
     parser.add_argument('--mlp_window_size', default=3, type=int,
                         help='MLP only. Number of time steps in the past used to predict the next neck movement.')
     parser.add_argument('--hidden_sizes', nargs='*', type=int,
                         help='Sizes of the hidden layers.')
-    parser.add_argument('--seq_len_max', default=1024, type=int,
-                        help='LSTM only. Maximum sequence length.')
+    parser.add_argument('--seq_len_max', default=512, type=int,
+                        help='LSTM only. Maximum sequence length during training.')
     # Optimization configuration.
     parser.add_argument('--batch_size', default=64, type=int,
                         help='Size of data batches during training for which the network will be optimized.')
@@ -65,10 +71,13 @@ def train(
         downsampling_rate=1,
         drop_blinks=False,
         drop_gaze_z=False,
+        use_relative_positions=False,
+        use_update_frames=False,
+        drop_head_input=False,
         task_names=None,
         mlp_window_size=3,
         hidden_sizes=None,
-        seq_len_max=1024,
+        seq_len_max=512,
         batch_size=64,
         learning_rate=0.001,
         epochs=100,
@@ -82,6 +91,8 @@ def train(
 
     # Create model.
     instance_size = 7 if drop_gaze_z else 9
+    if drop_head_input:
+        instance_size -= 3
     if model_type == 'mlp':
         model = gaze_modeling.GazeMLP(
             instance_size,
@@ -121,10 +132,10 @@ def train(
 
     # Shuffle and split users.
     perm = rng.permutation(len(users))  # Shuffle indices.
-    n_users_test = max(0, min(len(users), int(len(users) * test_ratio)))  # Bound in [0, n].
-    if n_users_test == 0:
+    n_users_test = int(len(users) * test_ratio)
+    if n_users_test <= 0:
         raise ValueError(f'Parameter `test_ratio` is too small: {test_ratio}')
-    if n_users_test == len(users):
+    if n_users_test >= len(users):
         raise ValueError(f'Parameter `test_ratio` is too large: {test_ratio}')
     n_users_val = int((len(users) - n_users_test) * val_ratio)
     users_val = [users[i] for i in perm[:n_users_val]]
@@ -140,19 +151,21 @@ def train(
         'downsampling_rate': downsampling_rate,
         'drop_blinks': drop_blinks,
         'drop_gaze_z': drop_gaze_z,
+        'use_relative_positions': use_relative_positions,
+        'use_update_frames': use_update_frames,
+        'drop_head_input': drop_head_input,
     }
     sequences_X_train, sequences_Y_train =\
         data_utils.load_sequences_X_Y(users_train, task_names, user_task_paths, **kwargs_load)
     sequences_X_val, sequences_Y_val =\
         data_utils.load_sequences_X_Y(users_val, task_names, user_task_paths, **kwargs_load)
     if model_type in {'lstm'}:
-        X_train, Y_train = to_time_series_dict(sequences_X_train, sequences_Y_train, seq_len_max)
-        X_val, Y_val = to_time_series_dict(sequences_X_val, sequences_Y_val, seq_len_max)
-        print('X_train sequence lengths: {}'.format({length: sequences.shape[1] for length, sequences in X_train.items()}))
+        X_train, Y_train = to_time_series(sequences_X_train, sequences_Y_train)
+        X_val, Y_val = to_time_series(sequences_X_val, sequences_Y_val)
     else:
         X_train, Y_train = np.concatenate(sequences_X_train, axis=0), np.concatenate(sequences_Y_train, axis=0)
         X_val, Y_val = np.concatenate(sequences_X_val, axis=0), np.concatenate(sequences_Y_val, axis=0)
-        print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
+    print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
 
     if torch.cuda.is_available():
         device = torch.device('cuda')  # Use the default GPU device
@@ -167,13 +180,14 @@ def train(
     losses_train = list()
     losses_val = list()
     loss_val_min = None
-    path_val_best = os.path.join(path_stamp, 'val_best.pth')
+    path_val_best = os.path.join(path_stamp, 'mlp.pth')
     early_stopping_counter = 0
     for epoch in range(epochs):
         if model_type in {'lstm'}:
-            loss_train = train_one_epoch_recurrent(model, X_train, Y_train, optimizer, criterion, batch_size, device, rng)
+            loss_train = train_one_epoch_recurrent(
+                model, X_train, Y_train, optimizer, criterion, seq_len_max, batch_size, device, rng)
             losses_train.append(loss_train)
-            _, loss_val = evaluate_recurrent(model, X_val, Y_val, criterion, batch_size, device)
+            _, loss_val = evaluate_recurrent(model, X_val, Y_val, criterion, seq_len_max, batch_size, device)
         else:
             loss_train = train_one_epoch(model, X_train, Y_train, optimizer, criterion, batch_size, device, rng)
             losses_train.append(loss_train)
@@ -190,11 +204,16 @@ def train(
             if early_stopping_counter == early_stopping_patience:
                 break
 
-    # Evaluate.
+    del sequences_X_train
+    del sequences_Y_train
+    del sequences_X_val
+    del sequences_Y_val
     del X_train
     del Y_train
     del X_val
     del Y_val
+
+    # Evaluate.
     sequences_X_test, sequences_Y_test = data_utils.load_sequences_X_Y(
         users_test,
         task_names,
@@ -203,10 +222,13 @@ def train(
         downsampling_rate=downsampling_rate,
         drop_blinks=False,  # Assume that is not possible to ignore blinks during testing.
         drop_gaze_z=drop_gaze_z,
+        use_relative_positions=use_relative_positions,
+        use_update_frames=use_update_frames,
+        drop_head_input=drop_head_input,
     )
     if model_type in {'lstm'}:
-        X_test, Y_test = to_time_series_dict(sequences_X_test, sequences_Y_test, seq_len_max)
-        Y_test_hat, loss_test = evaluate_recurrent(model, X_test, Y_test, criterion, batch_size, device)
+        X_test, Y_test = to_time_series(sequences_X_test, sequences_Y_test)
+        Y_test_hat, loss_test = evaluate_recurrent(model, X_test, Y_test, criterion, seq_len_max, batch_size, device)
     else:
         X_test, Y_test = np.concatenate(sequences_X_test, axis=0), np.concatenate(sequences_Y_test, axis=0)
         Y_test_hat, loss_test = evaluate(model, X_test, Y_test, criterion, device)
@@ -217,31 +239,17 @@ def train(
     np.save(os.path.join(path_stamp, 'test_head_actual.npy'), Y_test)
 
 
-def to_time_series_dict(sequences_X, sequences_Y, seq_len_max):
-    X, Y = defaultdict(list), defaultdict(list)
-    for sequence_X, sequence_Y in zip(sequences_X, sequences_Y):
-        if len(sequence_X) <= seq_len_max:
-            X[len(sequence_X)].append(sequence_X)
-            Y[len(sequence_Y)].append(sequence_Y)
-        else:
-            # Break up long sequences.
-            i = 0
-            while i < len(sequence_X):
-                chunk_X, chunk_Y = sequence_X[i:i + seq_len_max], sequence_Y[i:i + seq_len_max]
-                X[len(chunk_X)].append(chunk_X)
-                Y[len(chunk_Y)].append(chunk_Y)
-                i += seq_len_max
-
+def to_time_series(sequences_X, sequences_Y):
+    # TODO: Change `min` below to be compatible with `drop_blinks` parameter.
+    length_min = min([sequence_X.shape[0] for sequence_X in sequences_X])
     # `transpose()` is to provide axes as:
-    #  (sequence_length, batch_size, instance_size)
+    #  (sequence_length, batch_size, |Z|)
     # instead of:
-    #  (batch_size, sequence_length, instance_size)
+    #  (batch_size, sequence_length, |Z|)
     # in order to comply with `LSTM(batch_first=False)`.
-    X = {length: np.array(chunks).transpose(1, 0, 2)
-         for length, chunks in X.items()}  # (length, N_{length}, instance_size) for each `length`.
-    Y = {length: np.array(chunks).transpose(1, 0, 2)
-         for length, chunks in Y.items()}  # (length, N_{length}, output_size=3) for each `length`.
-    return X, Y
+    X, Y = (np.stack([seq[:length_min] for seq in sequences], axis=0).transpose(1, 0, 2)
+            for sequences in (sequences_X, sequences_Y))
+    return X, Y  # (seq_len, N, instance_size), (seq_len, N, output_size=3).
 
 
 def train_one_epoch(model, X, Y, optimizer, criterion, batch_size, device, rng):
@@ -265,30 +273,39 @@ def train_one_epoch(model, X, Y, optimizer, criterion, batch_size, device, rng):
     return np.average(batch_losses, weights=batch_sizes)
 
 
-def train_one_epoch_recurrent(model, X, Y, optimizer, criterion, batch_size, device, rng):
-    losses = list()
-    sizes = list()
-    for length in X.keys():
-        batch_losses = list()
-        batch_sizes = list()
-        n = X[length].shape[1]
-        order = rng.permutation(n)  # Shuffle.
-        i = 0
-        while i < n:
+def train_one_epoch_recurrent(model, X, Y, optimizer, criterion, seq_len_max, batch_size, device, rng):
+    seq_len, n = X.shape[0], X.shape[1]
+    order = rng.permutation(n)  # Shuffle along batch axis.
+    batch_losses = list()
+    batch_sizes = list()
+    i = 0
+    while i < n:
+        X_batch = X[:, order[i:i + batch_size]]  # A batch of full - possibly too long for memory - sequences.
+        Y_batch = Y[:, order[i:i + batch_size]]
+        t_losses = list()
+        lengths = list()
+        h0, c0 = None, None
+        t = 0
+        while t < seq_len:
             optimizer.zero_grad()
-            X_batch = torch.tensor(X[length][:, order[i:i + batch_size]]).to(device)
-            Y_hat_batch, _, _ = model(X_batch)
-            Y_batch = torch.tensor(Y[length][:, order[i:i + batch_size]]).to(device)
-            loss = criterion(Y_hat_batch, Y_batch)
+            X_batch_t = torch.tensor(X_batch[t:t + seq_len_max]).to(device)
+            Y_hat_batch_t, hn, cn = model(X_batch_t, h0=h0, c0=c0)
+            Y_batch_t = torch.tensor(Y_batch[t:t + seq_len_max]).to(device)
+            loss = criterion(Y_hat_batch_t, Y_batch_t)
             loss.backward()
             optimizer.step()
-            batch_losses.append(loss.detach().cpu().numpy())
-            batch_sizes.append(X_batch.shape[1])
-            i += batch_size
-        losses.append(np.average(batch_losses, weights=batch_sizes))
-        sizes.append(n)
 
-    return np.average(losses, weights=sizes)
+            h0, c0 = hn.detach(), cn.detach()  # Use final hidden states as inputs to the next sequence.
+
+            t_losses.append(loss.detach().cpu().numpy())
+            lengths.append(X_batch_t.shape[0])
+            t += seq_len_max
+
+        batch_losses.append(np.average(t_losses, weights=lengths))
+        batch_sizes.append(X_batch.shape[1])
+        i += batch_size
+
+    return np.average(batch_losses, weights=batch_sizes)
 
 
 def evaluate(model, X, Y, criterion, device):
@@ -298,31 +315,38 @@ def evaluate(model, X, Y, criterion, device):
     return Y_hat.detach().cpu().numpy(), loss.detach().cpu().numpy()
 
 
-def evaluate_recurrent(model, X, Y, criterion, batch_size, device):
-    Y_hat = dict()
-    losses = list()
-    sizes = list()
-    for length in X.keys():
-        batch_Y_hat = list()
-        batch_losses = list()
-        batch_sizes = list()
-        n = X[length].shape[1]
-        i = 0
-        while i < n:
-            X_batch = torch.tensor(X[length][:, i:i + batch_size]).to(device)
+def evaluate_recurrent(model, X, Y, criterion, seq_len_max, batch_size, device):
+    seq_len, n = X.shape[0], X.shape[1]
+    i = 0
+    batch_Y_hat = list()
+    batch_losses = list()
+    batch_sizes = list()
+    while i < n:
+        X_batch = X[:, i:i + batch_size]
+        Y_batch = Y[:, i:i + batch_size]
+        t_Y_hat = list()
+        t_losses = list()
+        lengths = list()
+        h0, c0 = None, None
+        t = 0
+        while t < seq_len:
+            X_batch_t = torch.tensor(X_batch[t:t + seq_len_max]).to(device)
             with torch.no_grad():
-                Y_hat_batch, _, _ = model(X_batch)
-            Y_batch = torch.tensor(Y[length][:, i:i + batch_size]).to(device)
-            loss = criterion(Y_hat_batch, Y_batch)
-            batch_Y_hat.append(Y_hat_batch.detach().cpu().numpy())
-            batch_losses.append(loss.detach().cpu().numpy())
-            batch_sizes.append(X_batch.shape[1])
-            i += batch_size
-        Y_hat[length] = np.concatenate(batch_Y_hat, axis=1)
-        losses.append(np.average(batch_losses, weights=batch_sizes))
-        sizes.append(n)
+                Y_hat_batch_t, hn, cn = model(X_batch_t, h0=h0, c0=c0)
+            Y_batch_t = torch.tensor(Y_batch[t:t + seq_len_max]).to(device)
+            loss = criterion(Y_hat_batch_t, Y_batch_t)
+            t_Y_hat.append(Y_hat_batch_t.detach().cpu().numpy())
+            t_losses.append(loss.detach().cpu().numpy())
+            lengths.append(X_batch_t.shape[0])
+            h0, c0 = hn.detach(), cn.detach()  # Use final hidden states.
+            t += seq_len_max
 
-    return Y_hat, np.average(losses, weights=sizes)
+        batch_Y_hat.append(np.concatenate(t_Y_hat, axis=0))
+        batch_losses.append(np.average(t_losses, weights=lengths))
+        batch_sizes.append(X_batch.shape[1])
+        i += batch_size
+
+    return np.concatenate(batch_Y_hat, axis=1), np.average(batch_losses, weights=batch_sizes)
 
 
 if __name__ == '__main__':

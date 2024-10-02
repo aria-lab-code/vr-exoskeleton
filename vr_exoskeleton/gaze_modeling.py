@@ -50,30 +50,28 @@ class GazeLSTM(nn.Module):
                 in_dim = hidden_size
             self.net.append(nn.Linear(in_dim, OUTPUT_SIZE))
 
-    def forward(self, x, h_0=None, c_0=None):  # (L, N, I), (1, N, H), (1, N, H)
+    def forward(self, x, h0=None, c0=None):  # (L, N, I), (1, N, H), (1, N, H)
         """
         Predict next head position from previous gaze and head position.
         :param x: Sequence and/or batch of gaze vector(s) as `[*gaze_l, *gaze_r, *head]`.
-        :param h_0: Initial hidden state.
-        :param c_0: Initial context vector.
-        :return: `(y, h_n, c_n)` as a tuple.
+        :param h0: Initial hidden state.
+        :param c0: Initial context vector.
+        :return: `(y, hn, cn)` as a tuple.
         """
         # L = sequence length
         # N = batch_size
         # I = instance_size
         # H = hidden_size
         # O = OUTPUT_SIZE
-        if h_0 is not None and c_0 is not None:
-            hx_0 = h_0, c_0
+        if h0 is not None and c0 is not None:
+            hx0 = h0, c0
         else:
-            hx_0 = None
-        x, (h_n, c_n) = self.lstm(x, hx_0)  # (L, N, H), ((1, N, H), (1, N, H))
+            hx0 = None
+        x, (hn, cn) = self.lstm(x, hx0)  # (L, N, H), ((1, N, H), (1, N, H))
 
         if self.net is None:
             y = x
         else:
-            y = torch.zeros((x.shape[0], x.shape[1], OUTPUT_SIZE)).to(x.device)  # (L, N, O)
-            for i in range(x.shape[0]):
-                y[i] = self.net(x[i])  # Like `TimeDistributed` in Keras.
+            y = torch.stack([self.net(x[i]) for i in range(x.shape[0])], dim=0)
 
-        return y, h_n, c_n
+        return y, hn, cn

@@ -20,15 +20,19 @@ def main():
                         help='Sizes of the hidden layers of the MLP.')
     parser.add_argument('--drop_gaze_z', action='store_true',
                         help='Flag to drop the z-dimension of the left and right gaze vectors.')
+    parser.add_argument('--drop_head_input', action='store_true',
+                        help='Flag to remove head position data as input, hypothetically improving inference.')
     kwargs = vars(parser.parse_args())
     export(**kwargs)
 
 
-def export(model_type, path, mlp_window_size=3, hidden_sizes=None, drop_gaze_z=False):
+def export(model_type, path, mlp_window_size=3, hidden_sizes=None, drop_gaze_z=False, drop_head_input=False):
     if hidden_sizes is None:
         hidden_sizes = list()
 
     instance_size = 7 if drop_gaze_z else 9
+    if drop_head_input:
+        instance_size -= 3
     if model_type == 'mlp':
         model = gaze_modeling.GazeMLP(instance_size, window_size=mlp_window_size, hidden_sizes=hidden_sizes)
         inputs = torch.zeros(1, 1, model.input_size)
@@ -57,9 +61,9 @@ def export(model_type, path, mlp_window_size=3, hidden_sizes=None, drop_gaze_z=F
         export_params=True,
         input_names=input_names,
         output_names=output_names,
-        # opset_version=10,  # This is what Jordan used previously.
-        opset_version=11,
-        do_constant_folding=True,
+        opset_version=10,  # This is what Jordan used previously.
+        # opset_version=11,
+        # do_constant_folding=True,
     )
     print(f'Saved ONNX format model to `{path_out}`.')
 
