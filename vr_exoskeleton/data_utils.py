@@ -5,23 +5,26 @@ import numpy as np
 import pandas as pd
 
 PATH_DATA = 'data'
+PATH_USERS = os.path.join(PATH_DATA, 'Users')
 PATH_SCORES = os.path.join(PATH_DATA, 'ScoreRecord.csv')
 
 N_TRIALS = 3
 
+SECONDS_PER_TRIAL = 90
+
 
 def get_user_task_paths():
     user_task_paths = defaultdict(lambda: defaultdict(list))
-    users = sorted([name for name in os.listdir(PATH_DATA)
+    users = sorted([name for name in os.listdir(PATH_USERS)
                     if name.startswith('User')],
                    key=lambda user_: int(user_[4:]))  # Numerical sort by ID number.
     for user in users:
-        files = sorted(os.listdir(os.path.join(PATH_DATA, user)))
+        files = sorted(os.listdir(os.path.join(PATH_USERS, user)))
         for file in files:
             parts = file.split('_')
             assert parts[0] == user, f'File name in folder doesn\'t match user `{user}`: {parts[0]}'
             task = parts[1]
-            path = os.path.join(PATH_DATA, user, file)
+            path = os.path.join(PATH_USERS, user, file)
             user_task_paths[user][task].append(path)
 
     keys0 = user_task_paths[users[0]].keys()
@@ -41,11 +44,11 @@ def load_sequences_X_Y(
         users,
         tasks,
         user_task_paths,
-        window_size=3,
+        window_size=1,
         downsampling_rate=1,
         drop_blinks=False,
         drop_gaze_z=False,
-        use_relative_positions=False,
+        predict_relative_head=False,
         use_update_frames=False,
         drop_head_input=False,
 ):
@@ -102,10 +105,6 @@ def load_sequences_X_Y(
                         # Consider only every `downsampling_rate` rows, if applicable.
                         data = df.iloc[start + shift:end + 1:downsampling_rate].to_numpy()
 
-                        # Use delta between adjacent positions.
-                        if use_relative_positions:
-                            data = data[1:] - data[:-1]
-
                         X = np.zeros((len(data) - window_size, instance_size * window_size), np.float32)
                         for w in range(window_size):
                             # The entire range starting from `start` accounts for the first
@@ -121,10 +120,14 @@ def load_sequences_X_Y(
                             #                        , :i_s]    First `instance_size` columns
                             #                                     (may exclude head).
                             X[:, w * instance_size:(w + 1) * instance_size] = data[w:-window_size + w, :instance_size]
-                        sequences_X.append(X)
 
                         # All head values (`-3:`) from `window_size` until the end.
                         Y = data[window_size:, -3:].astype(np.float32)
+                        if predict_relative_head:
+                            Y = Y[1:] - Y[:-1]
+                            X = X[:-1]  # Chop off the last data point to match length of Y.
+
+                        sequences_X.append(X)
                         sequences_Y.append(Y)
 
     return sequences_X, sequences_Y

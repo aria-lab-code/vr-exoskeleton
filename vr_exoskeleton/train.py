@@ -35,8 +35,8 @@ def main():
                         help='Flag to exclude portions of training and validation data in which the user blinked.')
     parser.add_argument('--drop_gaze_z', action='store_true',
                         help='Flag to drop the z-dimension of the left and right gaze vectors.')
-    parser.add_argument('--use_relative_positions', action='store_true',
-                        help='Flag to model relative eye and head positions instead of absolute ones.'
+    parser.add_argument('--predict_relative_head', action='store_true',
+                        help='Flag to predict relative head positions instead of absolute ones.'
                              ' Applies AFTER down-sampling, if also used.')
     parser.add_argument('--use_update_frames', action='store_true',
                         help='Flag to filter by the game\'s frame rate (~90Hz) instead of the eye tracker\'s (120Hz)')
@@ -71,7 +71,7 @@ def train(
         downsampling_rate=1,
         drop_blinks=False,
         drop_gaze_z=False,
-        use_relative_positions=False,
+        predict_relative_head=False,
         use_update_frames=False,
         drop_head_input=False,
         task_names=None,
@@ -151,7 +151,7 @@ def train(
         'downsampling_rate': downsampling_rate,
         'drop_blinks': drop_blinks,
         'drop_gaze_z': drop_gaze_z,
-        'use_relative_positions': use_relative_positions,
+        'predict_relative_head': predict_relative_head,
         'use_update_frames': use_update_frames,
         'drop_head_input': drop_head_input,
     }
@@ -180,7 +180,7 @@ def train(
     losses_train = list()
     losses_val = list()
     loss_val_min = None
-    path_val_best = os.path.join(path_stamp, 'mlp.pth')
+    path_val_best = os.path.join(path_stamp, 'val_best.pth')
     early_stopping_counter = 0
     for epoch in range(epochs):
         if model_type in {'lstm'}:
@@ -222,7 +222,7 @@ def train(
         downsampling_rate=downsampling_rate,
         drop_blinks=False,  # Assume that is not possible to ignore blinks during testing.
         drop_gaze_z=drop_gaze_z,
-        use_relative_positions=use_relative_positions,
+        predict_relative_head=predict_relative_head,
         use_update_frames=use_update_frames,
         drop_head_input=drop_head_input,
     )
