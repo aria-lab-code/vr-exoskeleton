@@ -6,25 +6,38 @@ import pandas as pd
 
 PATH_DATA = 'data'
 PATH_USERS = os.path.join(PATH_DATA, 'Users')
+PATH_USERS_90HZ = os.path.join(PATH_DATA, 'Users_90hz')
 PATH_SCORES = os.path.join(PATH_DATA, 'ScoreRecord.csv')
 
+TASK_NAMES = (
+    'ArcSmoothPursuit',
+    'LinearSmoothPursuit',
+    'RapidVisualSearch',
+    'RapidVisualSearchAvoidance',
+)
 N_TRIALS = 3
 
 SECONDS_PER_TRIAL = 90
 
 
-def get_user_task_paths():
+def get_user_task_paths(use_update_frames=True):
+    if use_update_frames:
+        _write_90hz_files_if_needed()
+        path_users = PATH_USERS_90HZ
+    else:
+        path_users = PATH_USERS
+
     user_task_paths = defaultdict(lambda: defaultdict(list))
-    users = sorted([name for name in os.listdir(PATH_USERS)
+    users = sorted([name for name in os.listdir(path_users)
                     if name.startswith('User')],
                    key=lambda user_: int(user_[4:]))  # Numerical sort by ID number.
     for user in users:
-        files = sorted(os.listdir(os.path.join(PATH_USERS, user)))
+        files = sorted(os.listdir(os.path.join(path_users, user)))
         for file in files:
             parts = file.split('_')
             assert parts[0] == user, f'File name in folder doesn\'t match user `{user}`: {parts[0]}'
             task = parts[1]
-            path = os.path.join(PATH_USERS, user, file)
+            path = os.path.join(path_users, user, file)
             user_task_paths[user][task].append(path)
 
     keys0 = user_task_paths[users[0]].keys()
@@ -40,6 +53,28 @@ def get_user_task_paths():
     return users, tasks, user_task_paths
 
 
+def _write_90hz_files_if_needed():
+    os.makedirs(PATH_USERS_90HZ, exist_ok=True)
+    users, tasks, user_task_paths = get_user_task_paths(use_update_frames=False)
+    for user in users:
+        path_user_90hz = os.path.join(PATH_USERS_90HZ, user)
+        os.makedirs(path_user_90hz, exist_ok=True)
+        for task in tasks:
+            for path in user_task_paths[user][task]:
+                _, tail = os.path.split(path)
+                path_90hz = os.path.join(path_user_90hz, tail)
+                if not os.path.exists(path_90hz):
+                    print(f'Writing 90hz file: {path_90hz}')
+                    df = pd.read_csv(path)
+                    update_indices = list()
+                    for i in range(1, len(df)):
+                        if any(v != v_prev for v, v_prev in zip(df.iloc[i, -2:], df.iloc[i - 1, -2:])):
+                            update_indices.append(i)
+                    df = df.iloc[update_indices]
+                    df.to_csv(path_90hz, index=False)
+                    # pd.DataFrame().to_csv()
+
+
 def load_sequences_X_Y(
         users,
         tasks,
@@ -49,12 +84,11 @@ def load_sequences_X_Y(
         drop_blinks=False,
         drop_gaze_z=False,
         predict_relative_head=False,
-        use_update_frames=False,
         drop_head_input=False,
 ):
-    if window_size <= 0:
+    if window_size < 1:
         raise ValueError(f'Window size cannot be less than 1: {window_size:d}')
-    if downsampling_rate <= 0:
+    if downsampling_rate < 1:
         raise ValueError(f'Down-sample rate cannot be less than 1: {downsampling_rate:d}')
 
     sequences_X = list()
@@ -64,13 +98,6 @@ def load_sequences_X_Y(
             for trial in range(N_TRIALS):
                 df = pd.read_csv(user_task_paths[user][task][trial])
                 df = df.drop(columns=['time_stamp(ms)'])
-
-                if use_update_frames:
-                    update_indices = list()
-                    for i in range(1, len(df)):
-                        if any(v != v_prev for v, v_prev in zip(df.iloc[i, -2:], df.iloc[i - 1, -2:])):
-                            update_indices.append(i)
-                    df = df.iloc[update_indices]
 
                 intervals_valid = list()
                 if not drop_blinks or drop_gaze_z:

@@ -72,7 +72,7 @@ def train(
         drop_blinks=False,
         drop_gaze_z=False,
         predict_relative_head=False,
-        use_update_frames=False,
+        use_update_frames=True,
         drop_head_input=False,
         task_names=None,
         mlp_window_size=3,
@@ -124,7 +124,7 @@ def train(
     print(f'Using seed: {seed}')
 
     # Load meta data.
-    users, tasks, user_task_paths = data_utils.get_user_task_paths()
+    users, tasks, user_task_paths = data_utils.get_user_task_paths(use_update_frames=use_update_frames)
     print(f'Total users: {len(users)}')
     if task_names is None:
         task_names = tasks
@@ -152,7 +152,6 @@ def train(
         'drop_blinks': drop_blinks,
         'drop_gaze_z': drop_gaze_z,
         'predict_relative_head': predict_relative_head,
-        'use_update_frames': use_update_frames,
         'drop_head_input': drop_head_input,
     }
     sequences_X_train, sequences_Y_train =\
@@ -223,7 +222,6 @@ def train(
         drop_blinks=False,  # Assume that is not possible to ignore blinks during testing.
         drop_gaze_z=drop_gaze_z,
         predict_relative_head=predict_relative_head,
-        use_update_frames=use_update_frames,
         drop_head_input=drop_head_input,
     )
     if model_type in {'lstm'}:
