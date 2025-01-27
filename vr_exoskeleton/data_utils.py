@@ -20,25 +20,28 @@ N_TRIALS = 3
 SECONDS_PER_TRIAL = 90
 
 
-def get_user_task_paths(use_update_frames=True):
-    if use_update_frames:
+def get_user_task_paths(use_eye_tracker_frames=False, ignore_users=None):
+    if ignore_users is None:
+        ignore_users = set()
+
+    if use_eye_tracker_frames:
+        path_users = PATH_USERS
+    else:
         _write_90hz_files_if_needed()
         path_users = PATH_USERS_90HZ
-    else:
-        path_users = PATH_USERS
 
     user_task_paths = defaultdict(lambda: defaultdict(list))
     users = sorted([name for name in os.listdir(path_users)
-                    if name.startswith('User')],
+                    if name.startswith('User') and name not in ignore_users],
                    key=lambda user_: int(user_[4:]))  # Numerical sort by ID number.
     for user in users:
         files = sorted(os.listdir(os.path.join(path_users, user)))
         for file in files:
             parts = file.split('_')
-            assert parts[0] == user, f'File name in folder doesn\'t match user `{user}`: {parts[0]}'
-            task = parts[1]
-            path = os.path.join(path_users, user, file)
-            user_task_paths[user][task].append(path)
+            if parts[0] == user:
+                task = parts[1]
+                path = os.path.join(path_users, user, file)
+                user_task_paths[user][task].append(path)
 
     keys0 = user_task_paths[users[0]].keys()
     for user in users[1:]:
@@ -55,7 +58,7 @@ def get_user_task_paths(use_update_frames=True):
 
 def _write_90hz_files_if_needed():
     os.makedirs(PATH_USERS_90HZ, exist_ok=True)
-    users, tasks, user_task_paths = get_user_task_paths(use_update_frames=False)
+    users, tasks, user_task_paths = get_user_task_paths(use_eye_tracker_frames=True)
     for user in users:
         path_user_90hz = os.path.join(PATH_USERS_90HZ, user)
         os.makedirs(path_user_90hz, exist_ok=True)
@@ -67,27 +70,21 @@ def _write_90hz_files_if_needed():
                     print(f'Writing 90hz file: {path_90hz}')
                     df = pd.read_csv(path)
                     update_indices = list()
+                    # Drop the second instance in pairs of repeated head directions.
                     for i in range(1, len(df)):
-                        if any(v != v_prev for v, v_prev in zip(df.iloc[i, -2:], df.iloc[i - 1, -2:])):
+                        if any(v != v_prev for v, v_prev in zip(df.iloc[i, -3:], df.iloc[i - 1, -3:])):
                             update_indices.append(i)
                     df = df.iloc[update_indices]
                     df.to_csv(path_90hz, index=False)
-                    # pd.DataFrame().to_csv()
 
 
-def load_sequences_X_Y(
+def load_X_Y(
         users,
         tasks,
         user_task_paths,
-        window_size=1,
         downsampling_rate=1,
-        drop_blinks=False,
-        drop_gaze_z=False,
-        predict_relative_head=False,
-        drop_head_input=False,
+        interpolate_blinks=False,
 ):
-    if window_size < 1:
-        raise ValueError(f'Window size cannot be less than 1: {window_size:d}')
     if downsampling_rate < 1:
         raise ValueError(f'Down-sample rate cannot be less than 1: {downsampling_rate:d}')
 
@@ -97,64 +94,68 @@ def load_sequences_X_Y(
         for task in tasks:
             for trial in range(N_TRIALS):
                 df = pd.read_csv(user_task_paths[user][task][trial])
-                df = df.drop(columns=['time_stamp(ms)'])
+                df.drop(columns=['time_stamp(ms)'], inplace=True)
+                data = df.to_numpy().astype(np.float32)
+                n = data.shape[0]
 
-                intervals_valid = list()
-                if not drop_blinks or drop_gaze_z:
-                    # Use all rows, including during blinks.
-                    intervals_valid.append((0, len(df) - 1))
-                else:
-                    # Filter on both eyes open.
-                    df_open = df[(df['eye_in_head_left_z'] != 0.0) & (df['eye_in_head_right_z'] != 0.0)]
+                left, right = slice(0, 3), slice(3, 6)
+                all_blinks = False  # Check whether this user blinked through the WHOLE trial (extremely unlikely!).
+                for side in (left, right):
+                    data_side = data[:, side]
+                    indices_blink = [i for i, v in enumerate(data_side[:, -1]) if v == 0.0]
+                    if len(indices_blink) == n:
+                        all_blinks = True
+                        break
 
-                    if len(df_open) > 0:  # It is unlikely that any user closed their eyes through the entire trial.
-                        # Collect only contiguous ranges of data where the eyes are open.
-                        start_open = df_open.index[0]
-                        for i in range(1, len(df_open.index)):
-                            if df_open.index[i - 1] != df_open.index[i] - 1:
-                                intervals_valid.append((start_open, df_open.index[i - 1]))
-                                start_open = df_open.index[i]
-                        intervals_valid.append((start_open, df_open.index[-1]))
+                    if interpolate_blinks:
+                        intervals_blink = _to_intervals(indices_blink)
+                        for interval in intervals_blink:
+                            if interval[0] == 0:
+                                # Start of trial; Repeat first valid eye direction.
+                                for i in range(0, interval[1] + 1):
+                                    data[i, side] = data[interval[1] + 1, side]
+                            elif interval[1] == n - 1:
+                                # End of trial; Repeat last valid eye direction.
+                                for i in range(interval[0], n):
+                                    data[i, side] = data[interval[0] - 1, side]
+                            else:
+                                # Anywhere in the middle; Normalized linearly interpolate (nlerp).
+                                length = interval[1] - interval[0] + 1
+                                start, end = data[interval[0] - 1, side], data[interval[1] + 1, side]
+                                delta = (end - start) / (length + 1)
+                                for i in range(length):
+                                    data[interval[0] + i, side] = np.linalg.norm(start + (i + 1) * delta)
 
-                if drop_gaze_z:
-                    df = df.drop(columns=['eye_in_head_left_z', 'eye_in_head_right_z'])
-                instance_size = len(df.columns)
-                if drop_head_input:
-                    instance_size -= 3  # Don't include head_[x|y|z] in `X`.
+                if all_blinks:
+                    continue
 
                 # Create numpy array from open-eye segments.
-                for start, end in intervals_valid:
-                    for shift in range(downsampling_rate):
-                        # Skip segments with a duration that doesn't fit an entire window.
-                        if end - start - shift < window_size * downsampling_rate:
-                            continue
+                for shift in range(downsampling_rate):
+                    # Consider only every `downsampling_rate` rows, if applicable.
+                    data_shift = data[shift::downsampling_rate]
+                    X = data_shift[:-1]
+                    Y = data_shift[1:, -3:]
+                    sequences_X.append(X)
+                    sequences_Y.append(Y)
 
-                        # Consider only every `downsampling_rate` rows, if applicable.
-                        data = df.iloc[start + shift:end + 1:downsampling_rate].to_numpy()
+    # Truncate to smallest sequence length.
+    length_min = min([sequence_X.shape[0] for sequence_X in sequences_X])
+    X, Y = (np.stack([seq[:length_min] for seq in sequences], axis=0)
+            for sequences in (sequences_X, sequences_Y))
+    return X, Y  # (n, seq_len, 9), (n, seq_len, 3)
 
-                        X = np.zeros((len(data) - window_size, instance_size * window_size), np.float32)
-                        for w in range(window_size):
-                            # The entire range starting from `start` accounts for the first
-                            # [9|7|6|4]-value-wide 'column' of X. Increment the starting point of the
-                            # window via `w` and fill in the next [9|7|6|4]-value-wide 'column' of X.
-                            #
-                            # X[:                            Every row.
-                            #    , w * i_s:(w + 1) * i_s]    The w-th [9|7|6|4]-value-wide 'column',
-                            #                                  i.e., [6|4] eye gaze, [3|0] head values.
-                            #
-                            # data[w:-window_size + w           Exactly `n - window_size` data points,
-                            #                                     starting from index `w`.
-                            #                        , :i_s]    First `instance_size` columns
-                            #                                     (may exclude head).
-                            X[:, w * instance_size:(w + 1) * instance_size] = data[w:-window_size + w, :instance_size]
 
-                        # All head values (`-3:`) from `window_size` until the end.
-                        Y = data[window_size:, -3:].astype(np.float32)
-                        if predict_relative_head:
-                            Y = Y[1:] - Y[:-1]
-                            X = X[:-1]  # Chop off the last data point to match length of Y.
+def _to_intervals(indices):
+    if len(indices) == 0:
+        return list()
 
-                        sequences_X.append(X)
-                        sequences_Y.append(Y)
-
-    return sequences_X, sequences_Y
+    intervals = list()
+    start = indices[0]
+    index_prev = indices[0]
+    for index in indices[1:]:
+        if index - 1 != index_prev:
+            intervals.append((start, index_prev))
+            start = index
+        index_prev = index
+    intervals.append((start, indices[-1]))
+    return intervals

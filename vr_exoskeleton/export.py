@@ -14,33 +14,29 @@ def main():
                         help='Model architecture.')
     parser.add_argument('path',
                         help='Path to `.pth` file.')
-    parser.add_argument('--mlp_window_size', default=3, type=int,
-                        help='Window size of the MLP.')
     parser.add_argument('--hidden_sizes', nargs='*', type=int,
                         help='Sizes of the hidden layers of the MLP.')
-    parser.add_argument('--drop_gaze_z', action='store_true',
-                        help='Flag to drop the z-dimension of the left and right gaze vectors.')
     parser.add_argument('--drop_head_input', action='store_true',
                         help='Flag to remove head position data as input, hypothetically improving inference.')
     kwargs = vars(parser.parse_args())
     export(**kwargs)
 
 
-def export(model_type, path, mlp_window_size=3, hidden_sizes=None, drop_gaze_z=False, drop_head_input=False):
+def export(model_type, path, hidden_sizes=None, drop_head_input=False):
     if hidden_sizes is None:
         hidden_sizes = list()
 
-    instance_size = 7 if drop_gaze_z else 9
+    instance_size = 9
     if drop_head_input:
         instance_size -= 3
     if model_type == 'mlp':
-        model = gaze_modeling.GazeMLP(instance_size, window_size=mlp_window_size, hidden_sizes=hidden_sizes)
-        inputs = torch.zeros(1, 1, model.input_size)
+        model = gaze_modeling.GazeMLP(hidden_sizes=hidden_sizes)
+        inputs = torch.zeros(1, model.input_size)
         input_names = ('input',)
         output_names = ('output',)
     elif model_type == 'lstm':
-        model = gaze_modeling.GazeLSTM(instance_size, hidden_sizes=hidden_sizes)
-        inputs = (torch.zeros(1, 1, model.input_size),
+        model = gaze_modeling.GazeLSTM(hidden_sizes=hidden_sizes)
+        inputs = (torch.zeros(1, model.input_size),
                   torch.zeros(1, 1, model.hidden_size),
                   torch.zeros(1, 1, model.hidden_size))
         input_names = ('input', 'h0', 'c0')
