@@ -1,25 +1,28 @@
 import torch
 import torch.nn as nn
 
-INSTANCE_SIZE = 9  # (x,y,z) for each of gaze_left_eye, gaze_right_eye, head.
-OUTPUT_SIZE = 3  # Predict (x,y,z)_{t+1} of head.
+DIMS_EYE = 6  # (x, y, z) of left and right eyes.
+DIMS_HEAD_DIRECTION = 3  # (x, y, z) direction of head.
+DIMS_OUT_PITCH_YAW = 2  # Output: predict the pitch and yaw of the next direction.
 
 
 class GazeMLP(nn.Module):
 
-    def __init__(self, hidden_sizes=None):
+    def __init__(self, hidden_sizes=None, predict_relative_head=False):
         super(GazeMLP, self).__init__()
         if hidden_sizes is None:
             hidden_sizes = list()
 
-        self.input_size = INSTANCE_SIZE  # Input is formatted as left eye, right eye, and head vectors.
+        self.input_size = DIMS_EYE + DIMS_HEAD_DIRECTION
+        dims_out = DIMS_OUT_PITCH_YAW if predict_relative_head else DIMS_HEAD_DIRECTION
+
         self.net = nn.Sequential()
         in_dim = self.input_size
         for hidden_size in hidden_sizes:
             self.net.append(nn.Linear(in_dim, hidden_size))
             self.net.append(nn.ReLU())
             in_dim = hidden_size
-        self.net.append(nn.Linear(in_dim, OUTPUT_SIZE))
+        self.net.append(nn.Linear(in_dim, dims_out))
 
     def forward(self, x):
         return self.net(x)
@@ -27,24 +30,28 @@ class GazeMLP(nn.Module):
 
 class GazeLSTM(nn.Module):
 
-    def __init__(self, hidden_sizes=None):
+    def __init__(self, hidden_sizes=None, predict_relative_head=False):
         super(GazeLSTM, self).__init__()
+        if hidden_sizes is None:
+            hidden_sizes = list()
 
-        self.input_size = INSTANCE_SIZE
-        if hidden_sizes is None or len(hidden_sizes) == 0:
-            self.hidden_size = OUTPUT_SIZE
-            self.lstm = nn.LSTM(INSTANCE_SIZE, OUTPUT_SIZE)
+        self.input_size = DIMS_EYE + DIMS_HEAD_DIRECTION
+        dims_out = DIMS_OUT_PITCH_YAW if predict_relative_head else DIMS_HEAD_DIRECTION
+
+        if len(hidden_sizes) == 0:
+            self.hidden_size = dims_out
+            self.lstm = nn.LSTM(self.input_size, dims_out)
             self.net = None
         else:
             self.hidden_size = hidden_sizes[0]
-            self.lstm = nn.LSTM(INSTANCE_SIZE, hidden_sizes[0])
+            self.lstm = nn.LSTM(self.input_size, hidden_sizes[0])
             self.net = nn.Sequential()
             in_dim = hidden_sizes[0]
             for hidden_size in hidden_sizes[1:]:
                 self.net.append(nn.Linear(in_dim, hidden_size))
                 self.net.append(nn.ReLU())
                 in_dim = hidden_size
-            self.net.append(nn.Linear(in_dim, OUTPUT_SIZE))
+            self.net.append(nn.Linear(in_dim, dims_out))
 
     def forward(self, x, h0=None, c0=None):  # (N, 9), (1, N, H), (1, N, H)
         """
@@ -70,35 +77,3 @@ class GazeLSTM(nn.Module):
             y = self.net(x)
 
         return y, hn, cn  # (N, 3), (1, N, H), (1, N, H)
-
-
-class AngleLoss(nn.Module):
-
-    def forward(self, input_: torch.Tensor, target: torch.Tensor):
-        return torch.mean(angle_error(input_, target, dim=-1))
-
-
-def angle_error(input_: torch.Tensor, target: torch.Tensor, dim=None):
-    input_norm = torch.linalg.vector_norm(input_, dim=dim)
-    target_norm = torch.linalg.vector_norm(target, dim=dim)
-    eps = torch.zeros(input_norm.size(), dtype=input_norm.dtype, device=input_.device) + 1e-10  # Avoid division by zero.
-    input_norm = torch.maximum(eps, input_norm)
-    target_norm = torch.maximum(eps, target_norm)
-    return torch.acos((input_ * target).sum(dim=dim) / input_norm / target_norm)
-
-def main():
-    a = torch.tensor([[0.0, 0.0, 1.0]])
-    b = torch.tensor([[0.0, 0.0, 1.0]])
-    print(angle_error(a, b))
-
-    a = torch.tensor([[1.0, 0.0, 0.0]])
-    b = torch.tensor([[0.0, 0.0, 1.0]])
-    print(angle_error(a, b))
-
-    a = torch.tensor([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
-    b = torch.tensor([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
-    print(angle_error(a, b, dim=1))
-
-
-if __name__ == '__main__':
-    main()

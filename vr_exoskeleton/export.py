@@ -15,27 +15,24 @@ def main():
     parser.add_argument('path',
                         help='Path to `.pth` file.')
     parser.add_argument('--hidden_sizes', nargs='*', type=int,
-                        help='Sizes of the hidden layers of the MLP.')
-    parser.add_argument('--drop_head_input', action='store_true',
-                        help='Flag to remove head position data as input, hypothetically improving inference.')
+                        help='Sizes of the hidden layers.')
+    parser.add_argument('--predict_relative_head', action='store_true',
+                        help='Flag to predict relative head directions/rotations instead of absolute ones.')
     kwargs = vars(parser.parse_args())
     export(**kwargs)
 
 
-def export(model_type, path, hidden_sizes=None, drop_head_input=False):
+def export(model_type, path, hidden_sizes=None, predict_relative_head=False):
     if hidden_sizes is None:
         hidden_sizes = list()
 
-    instance_size = 9
-    if drop_head_input:
-        instance_size -= 3
     if model_type == 'mlp':
-        model = gaze_modeling.GazeMLP(hidden_sizes=hidden_sizes)
+        model = gaze_modeling.GazeMLP(hidden_sizes=hidden_sizes, predict_relative_head=predict_relative_head)
         inputs = torch.zeros(1, model.input_size)
         input_names = ('input',)
         output_names = ('output',)
     elif model_type == 'lstm':
-        model = gaze_modeling.GazeLSTM(hidden_sizes=hidden_sizes)
+        model = gaze_modeling.GazeLSTM(hidden_sizes=hidden_sizes, predict_relative_head=predict_relative_head)
         inputs = (torch.zeros(1, model.input_size),
                   torch.zeros(1, 1, model.hidden_size),
                   torch.zeros(1, 1, model.hidden_size))

@@ -5,8 +5,6 @@ import numpy as np
 import pandas as pd
 
 PATH_DATA = 'data'
-PATH_USERS = os.path.join(PATH_DATA, 'Users')
-PATH_USERS_90HZ = os.path.join(PATH_DATA, 'Users_90hz')
 PATH_SCORES = os.path.join(PATH_DATA, 'ScoreRecord.csv')
 
 TASK_NAMES = (
@@ -20,15 +18,14 @@ N_TRIALS = 3
 SECONDS_PER_TRIAL = 90
 
 
-def get_user_task_paths(use_eye_tracker_frames=False, ignore_users=None):
+def get_user_task_paths(base_users_folder='Users', use_eye_tracker_frames=False, ignore_users=None):
     if ignore_users is None:
         ignore_users = set()
 
-    if use_eye_tracker_frames:
-        path_users = PATH_USERS
-    else:
-        _write_90hz_files_if_needed()
-        path_users = PATH_USERS_90HZ
+    if not use_eye_tracker_frames:
+        _write_90hz_files_if_needed(base_users_folder)
+        base_users_folder += '_90hz'
+    path_users = os.path.join(PATH_DATA, base_users_folder)
 
     user_task_paths = defaultdict(lambda: defaultdict(list))
     users = sorted([name for name in os.listdir(path_users)
@@ -56,11 +53,13 @@ def get_user_task_paths(use_eye_tracker_frames=False, ignore_users=None):
     return users, tasks, user_task_paths
 
 
-def _write_90hz_files_if_needed():
-    os.makedirs(PATH_USERS_90HZ, exist_ok=True)
-    users, tasks, user_task_paths = get_user_task_paths(use_eye_tracker_frames=True)
+def _write_90hz_files_if_needed(base_users_folder):
+    path_users_90hz = os.path.join(PATH_DATA, base_users_folder + '_90hz')
+    os.makedirs(path_users_90hz, exist_ok=True)
+
+    users, tasks, user_task_paths = get_user_task_paths(base_users_folder=base_users_folder, use_eye_tracker_frames=True)
     for user in users:
-        path_user_90hz = os.path.join(PATH_USERS_90HZ, user)
+        path_user_90hz = os.path.join(path_users_90hz, user)
         os.makedirs(path_user_90hz, exist_ok=True)
         for task in tasks:
             for path in user_task_paths[user][task]:
@@ -79,9 +78,7 @@ def _write_90hz_files_if_needed():
 
 
 def load_X_Y(
-        users,
-        tasks,
-        user_task_paths,
+        paths,
         downsampling_rate=1,
         interpolate_blinks=False,
 ):
@@ -90,59 +87,54 @@ def load_X_Y(
 
     sequences_X = list()
     sequences_Y = list()
-    for user in users:
-        for task in tasks:
-            for trial in range(N_TRIALS):
-                df = pd.read_csv(user_task_paths[user][task][trial])
-                df.drop(columns=['time_stamp(ms)'], inplace=True)
-                data = df.to_numpy().astype(np.float32)
-                n = data.shape[0]
+    for path in paths:
+        df = pd.read_csv(path)
+        df.drop(columns=['time_stamp(ms)'], inplace=True)
+        data = df.to_numpy().astype(np.float32)
+        n = data.shape[0]
 
-                left, right = slice(0, 3), slice(3, 6)
-                all_blinks = False  # Check whether this user blinked through the WHOLE trial (extremely unlikely!).
-                for side in (left, right):
-                    data_side = data[:, side]
-                    indices_blink = [i for i, v in enumerate(data_side[:, -1]) if v == 0.0]
-                    if len(indices_blink) == n:
-                        all_blinks = True
-                        break
+        # Check whether this user blinked through the WHOLE trial (extremely unlikely!).
+        if all(row[2] == 0.0 and row[5] == 0.0 for row in data):
+            continue
 
-                    if interpolate_blinks:
-                        intervals_blink = _to_intervals(indices_blink)
-                        for interval in intervals_blink:
-                            if interval[0] == 0:
-                                # Start of trial; Repeat first valid eye direction.
-                                for i in range(0, interval[1] + 1):
-                                    data[i, side] = data[interval[1] + 1, side]
-                            elif interval[1] == n - 1:
-                                # End of trial; Repeat last valid eye direction.
-                                for i in range(interval[0], n):
-                                    data[i, side] = data[interval[0] - 1, side]
-                            else:
-                                # Anywhere in the middle; Normalized linearly interpolate (nlerp).
-                                length = interval[1] - interval[0] + 1
-                                start, end = data[interval[0] - 1, side], data[interval[1] + 1, side]
-                                delta = (end - start) / (length + 1)
-                                for i in range(length):
-                                    data[interval[0] + i, side] = np.linalg.norm(start + (i + 1) * delta)
+        if interpolate_blinks:
+            left, right = slice(0, 3), slice(3, 6)
+            for side in (left, right):
+                data_side = data[:, side]
+                indices_blink = [i for i, v in enumerate(data_side[:, -1]) if v == 0.0]
+                intervals_blink = _to_intervals(indices_blink)
+                for interval in intervals_blink:
+                    if interval[0] == 0:
+                        # Start of trial; Repeat first valid eye direction.
+                        for i in range(0, interval[1] + 1):
+                            data[i, side] = data[interval[1] + 1, side]
+                    elif interval[1] == n - 1:
+                        # End of trial; Repeat last valid eye direction.
+                        for i in range(interval[0], n):
+                            data[i, side] = data[interval[0] - 1, side]
+                    else:
+                        # Anywhere in the middle; Normalized linearly interpolate (nlerp).
+                        length = interval[1] - interval[0] + 1
+                        start, end = data[interval[0] - 1, side], data[interval[1] + 1, side]
+                        delta = (end - start) / (length + 1)
+                        for i in range(length):
+                            delta_scale = start + (i + 1) * delta
+                            data[interval[0] + i, side] = delta_scale / np.linalg.norm(delta_scale)
 
-                if all_blinks:
-                    continue
-
-                # Create numpy array from open-eye segments.
-                for shift in range(downsampling_rate):
-                    # Consider only every `downsampling_rate` rows, if applicable.
-                    data_shift = data[shift::downsampling_rate]
-                    X = data_shift[:-1]
-                    Y = data_shift[1:, -3:]
-                    sequences_X.append(X)
-                    sequences_Y.append(Y)
+        # Create numpy array from open-eye segments.
+        for shift in range(downsampling_rate):
+            # Consider only every `downsampling_rate` rows, if applicable.
+            data_shift = data[shift::downsampling_rate]
+            X = data_shift[:-1]
+            Y = data_shift[1:, 6:]
+            sequences_X.append(X)
+            sequences_Y.append(Y)
 
     # Truncate to smallest sequence length.
     length_min = min([sequence_X.shape[0] for sequence_X in sequences_X])
     X, Y = (np.stack([seq[:length_min] for seq in sequences], axis=0)
             for sequences in (sequences_X, sequences_Y))
-    return X, Y  # (n, seq_len, 9), (n, seq_len, 3)
+    return X, Y  # (n, seq_len, 6 + h), (n, seq_len, h)
 
 
 def _to_intervals(indices):

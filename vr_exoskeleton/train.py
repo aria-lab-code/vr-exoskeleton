@@ -5,7 +5,7 @@ import time
 import numpy as np
 import torch
 
-from vr_exoskeleton import data_utils, gaze_modeling
+from vr_exoskeleton import data_utils, gaze_modeling, spatial, vector_field
 
 
 def main():
@@ -26,22 +26,28 @@ def main():
                         help='Ratio of users within training set for whose data will be set aside for validation.')
     parser.add_argument('--seed', type=int,
                         help='Seeds the random number generator that shuffles and splits the data set.')
+    parser.add_argument('--allow_mixed_splits', action='store_true',
+                        help='Flag to allow data from the same users across train/validation/test sets.')
     # Data set.
+    parser.add_argument('--base_users_folder', default='Users', type=str,
+                        help='Folder name within `data/` from which to pull eye and head data.')
     parser.add_argument('--use_eye_tracker_frames', action='store_true',
                         help='Flag to filter by the eye tracker\'s (120Hz) frame rate instead of the game\'s (~90Hz).')
     parser.add_argument('--ignore_users', nargs='+',
                         help='List of user IDs to ignore. (User21 has a weird frame-rate for the second task.)')
-    parser.add_argument('--task_names', nargs='+',
-                        help='Name of the specific task(s) chosen.')
+    parser.add_argument('--task_names_train', nargs='+',
+                        help='Name of the specific task(s) chosen for training.')
+    parser.add_argument('--task_names_test', nargs='+',
+                        help='Name of the specific task(s) chosen for evaluation.')
     parser.add_argument('--downsampling_rate', default=1, type=int,
                         help='Rate by which data points will be down-sampled from the actual rate of 90Hz or 120Hz.')
     parser.add_argument('--interpolate_blinks_train', action='store_true',
                         help='Flag to interpolate portions of training data in which the user blinked.')
     parser.add_argument('--handle_blinks_test', default='noop', choices=('noop', 'repeat_last'),
                         help='Method to handle blinks during evaluation.')
-    parser.add_argument('--predict_relative_head', action='store_true',
-                        help='Flag to predict relative head directions instead of absolute ones.')
     # Model configuration.
+    parser.add_argument('--predict_relative_head', action='store_true',
+                        help='Flag to predict relative head directions/rotations instead of absolute ones.')
     parser.add_argument('--hidden_sizes', nargs='*', type=int,
                         help='Sizes of the hidden layers.')
     # Optimization configuration.
@@ -63,9 +69,12 @@ def train(
         test_ratio=0.25,
         val_ratio=0.1667,
         seed=None,
+        allow_mixed_splits=False,
+        base_users_folder='Users',
         use_eye_tracker_frames=False,
         ignore_users=None,
-        task_names=None,
+        task_names_train=None,
+        task_names_test=None,
         downsampling_rate=1,
         interpolate_blinks_train=False,
         handle_blinks_test='noop',
@@ -86,17 +95,14 @@ def train(
 
     # Create model.
     if model_type == 'mlp':
-        model = gaze_modeling.GazeMLP(
-            hidden_sizes=hidden_sizes,
-        )
+        model = gaze_modeling.GazeMLP(hidden_sizes=hidden_sizes,
+                                      predict_relative_head=predict_relative_head)
     elif model_type == 'lstm':
-        model = gaze_modeling.GazeLSTM(
-            hidden_sizes=hidden_sizes,
-        )
+        model = gaze_modeling.GazeLSTM(hidden_sizes=hidden_sizes,
+                                       predict_relative_head=predict_relative_head)
     else:
         raise ValueError(f'Unknown `model_type`: {model_type}')
 
-    # TODO: Add logging.
     stamp = str(int(time.time())) + '_' + model_type
     if run_name is not None:
         stamp += '_' + run_name
@@ -111,39 +117,81 @@ def train(
     print(f'Using seed: {seed}')
 
     # Load meta data.
-    users, tasks, user_task_paths = data_utils.get_user_task_paths(use_eye_tracker_frames=use_eye_tracker_frames,
+    users, tasks, user_task_paths = data_utils.get_user_task_paths(base_users_folder=base_users_folder,
+                                                                   use_eye_tracker_frames=use_eye_tracker_frames,
                                                                    ignore_users=ignore_users)
     print(f'Total users: {len(users)}')
-    if task_names is None:
-        task_names = tasks
-    print(f'Tasks: {task_names}')
+    if task_names_train is None:
+        task_names_train = tasks
+    if task_names_test is None:
+        task_names_test = tasks
+    print(f'Training tasks: {task_names_train}')
+    print(f'Evaluation tasks: {task_names_test}')
 
-    # Shuffle and split users.
-    perm = rng.permutation(len(users))  # Shuffle indices.
-    n_users_test = int(len(users) * test_ratio)
-    if n_users_test <= 0:
-        raise ValueError(f'Parameter `test_ratio` is too small: {test_ratio}')
-    if n_users_test >= len(users):
-        raise ValueError(f'Parameter `test_ratio` is too large: {test_ratio}')
-    n_users_val = int((len(users) - n_users_test) * val_ratio)
-    users_val = [users[i] for i in perm[:n_users_val]]
-    users_train = [users[i] for i in perm[n_users_val:-n_users_test]]
-    users_test = [users[i] for i in perm[-n_users_test:]]
-    print(f'Training with users ({len(users_train)}): {users_train}')
-    print(f'Validating with users ({len(users_val)}): {users_val}')
-    print(f'Evaluating with users ({len(users_test)}): {users_test}')
+    # Split data set.
+    if allow_mixed_splits:
+        # Aggregate all user data paths, then shuffle and split.
+        paths_union = list()
+        paths_exclusive_train = list()
+        paths_exclusive_test = list()
+        for user in users:
+            for task in tasks:
+                paths = user_task_paths[user][task]
+                if task in task_names_train:
+                    if task in task_names_test:
+                        paths_union.extend(paths)
+                    else:
+                        paths_exclusive_train.extend(paths)
+                elif task in task_names_test:
+                    paths_exclusive_test.extend(paths)
+
+        perm_union = rng.permutation(len(paths_union))  # Shuffle.
+        n_paths_union_test = int(len(paths_union) * test_ratio)
+        n_paths_union_val = int((len(paths_union) - n_paths_union_test) * val_ratio)
+        paths_val = [paths_union[i] for i in perm_union[:n_paths_union_val]]
+        paths_train = [paths_union[i] for i in perm_union[n_paths_union_val:-n_paths_union_test]]
+        paths_test = [paths_union[i] for i in perm_union[-n_paths_union_test:]]
+
+        perm_train = rng.permutation(len(paths_exclusive_train))
+        n_paths_train_val = int(len(paths_exclusive_train) * val_ratio)
+        paths_val += [paths_exclusive_train[i] for i in perm_train[:n_paths_train_val]]
+        paths_train += [paths_exclusive_train[i] for i in perm_train[n_paths_train_val:]]
+        paths_test += paths_exclusive_test
+        print('Number of train/validation/test trials: {:d}/{:d}/{:d}'
+              .format(len(paths_train), len(paths_val), len(paths_test)))
+    else:
+        # Shuffle and split data sets by user, then collect file paths.
+        perm = rng.permutation(len(users))  # Shuffle indices.
+        n_users_test = int(len(users) * test_ratio)
+        n_users_val = int((len(users) - n_users_test) * val_ratio)
+        users_val = [users[i] for i in perm[:n_users_val]]
+        users_train = [users[i] for i in perm[n_users_val:-n_users_test]]
+        users_test = [users[i] for i in perm[-n_users_test:]]
+        print(f'Training with users ({len(users_train)}): {users_train}')
+        print(f'Validating with users ({len(users_val)}): {users_val}')
+        print(f'Evaluating with users ({len(users_test)}): {users_test}')
+        np.save(os.path.join(path_stamp, 'test_users.npy'), np.array(users_test))
+
+        split_paths = [list(), list(), list()]
+        for i, users_split in enumerate([users_train, users_val, users_test]):
+            for user in users_split:
+                task_names = task_names_test if i == 2 else task_names_train
+                for task in task_names:
+                    split_paths[i].extend(user_task_paths[user][task])
+        paths_train, paths_val, paths_test = split_paths
 
     # Read training files, create data set.
-    kwargs_load = {
+    kwargs_train = {
         'downsampling_rate': downsampling_rate,
         'interpolate_blinks': interpolate_blinks_train,
     }
-    X_train, Y_train = data_utils.load_X_Y(users_train, task_names, user_task_paths, **kwargs_load)
-    X_val, Y_val = data_utils.load_X_Y(users_val, task_names, user_task_paths, **kwargs_load)
+    X_train, Y_train = data_utils.load_X_Y(paths_train, **kwargs_train)
+    X_val, Y_val = data_utils.load_X_Y(paths_val, **kwargs_train)
     if predict_relative_head:
-        Y_train -= X_train[:, :, 6:9]
-        Y_val -= X_val[:, :, 6:9]
+        Y_train = to_pitch_yaw(X_train, Y_train)
+        Y_val = to_pitch_yaw(X_val, Y_val)
     print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
+    print(f'X_val.shape: {X_val.shape}; Y_val.shape: {Y_val.shape}')
 
     if torch.cuda.is_available():
         device = torch.device('cuda')  # Use the default GPU device
@@ -154,7 +202,6 @@ def train(
 
     # Train.
     criterion = torch.nn.MSELoss()
-    # criterion = gaze_modeling.AngleLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     losses_train = list()
     losses_val = list()
@@ -187,57 +234,112 @@ def train(
     del Y_val
 
     # Evaluate.
-    X_test, Y_test = data_utils.load_X_Y(users_test, task_names, user_task_paths,
+    print('Evaluating...')
+    X_test, Y_test = data_utils.load_X_Y(paths_test,
+                                         downsampling_rate=downsampling_rate,
                                          interpolate_blinks=False)  # Assume presence of blinks during testing.
     if predict_relative_head:
-        Y_test -= X_test[:, :, 6:9]
+        Y_test = to_pitch_yaw(X_test, Y_test)
     criterion_test = torch.nn.MSELoss()
-    # criterion_test = gaze_modeling.AngleLoss()
     Y_test_hat, loss_test = _inference(model, X_test, Y_test, criterion_test, batch_size, device,
-                                       predict_relative_head=predict_relative_head, handle_blinks=handle_blinks_test)
+                                       predict_relative_head=predict_relative_head,
+                                       handle_blinks=handle_blinks_test)
     print(f'Loss on held-out test set: {loss_test:.8f}')
-    np.save(os.path.join(path_stamp, 'test_users.npy'), np.array(users_test))
     np.save(os.path.join(path_stamp, 'test_input.npy'), X_test)
     np.save(os.path.join(path_stamp, 'test_head_predicted.npy'), Y_test_hat)
     np.save(os.path.join(path_stamp, 'test_head_actual.npy'), Y_test)
 
+    # Log parameters and results.
+    path_log = os.path.join(path_stamp, 'log.txt')
+    with open(path_log, 'w') as fd:
+        fd.write(f'stamp: {stamp}\n')
+        fd.write('\n')
+        fd.write('============\nPARAMETERS\n============\n')
+        fd.write('\n')
+        fd.write(f'model_type: {model_type}\n')
+        fd.write(f'test_ratio: {test_ratio}\n')
+        fd.write(f'val_ratio: {val_ratio}\n')
+        fd.write(f'seed: {seed}\n')
+        fd.write(f'allow_mixed_splits: {allow_mixed_splits}\n')
+        fd.write('\n')
+        fd.write(f'base_users_folder: {base_users_folder}\n')
+        fd.write(f'use_eye_tracker_frames: {use_eye_tracker_frames}\n')
+        fd.write(f'ignore_users: {ignore_users}\n')
+        fd.write(f'task_names_train: {task_names_train}\n')
+        fd.write(f'task_names_test: {task_names_test}\n')
+        fd.write(f'downsampling_rate: {downsampling_rate}\n')
+        fd.write(f'interpolate_blinks_train: {interpolate_blinks_train}\n')
+        fd.write(f'handle_blinks_test: {handle_blinks_test}\n')
+        fd.write('\n')
+        fd.write(f'predict_relative_head: {predict_relative_head}\n')
+        fd.write(f'hidden_sizes: {hidden_sizes}\n')
+        fd.write('\n')
+        fd.write(f'batch_size: {batch_size}\n')
+        fd.write(f'learning_rate: {learning_rate}\n')
+        fd.write(f'epochs: {epochs}\n')
+        fd.write(f'early_stopping_patience: {early_stopping_patience}\n')
+        fd.write('\n')
+        fd.write('============\nRESULTS\n============\n')
+        fd.write('\n')
+        fd.write(f'test loss: {loss_test:.8f}')
 
-def _inference(model, X, Y, criterion, batch_size, device, predict_relative_head=False, handle_blinks=None, optimizer=None):
+    # Create visualizations.
+    print('Creating visualizations...')
+    points = list()
+    x_step, y_step = 0.01, 0.01
+    for y in range(-40, 21):
+        for x in range(-25, 26):
+            points.append((x * x_step, y * y_step))
+    point_to_theta = vector_field.predict_thetas(model, points, [0., 0., 1.], rng, device=device)
+    vector_field.hist_thetas(point_to_theta, path_stamp=path_stamp)
+    vector_field.plot_vector_field(point_to_theta, title='Function Estimation', path_stamp=path_stamp)
+
+
+def to_pitch_yaw(X, Y):
+    pitch_yaw = np.zeros((Y.shape[0], Y.shape[1], 2), dtype=Y.dtype)  # (n, s, 2)
+    for i, (v, v_next) in enumerate(zip(X[:, :, -3:], Y)):
+        pitch_yaw[i][:, 0] = spatial.to_pitch(v, v_next)
+        pitch_yaw[i][:, 1] = spatial.to_yaw(v, v_next)
+    return pitch_yaw
+
+
+def _inference(model, X, Y, criterion, batch_size, device,
+               predict_relative_head=False, handle_blinks=None, optimizer=None):
     if handle_blinks is not None:
         batch_size = 1  # Shouldn't let the model infer a batch containing blinks.
 
-    n, seq_len = X.shape[0], X.shape[1]
+    n, seq_len, dims_out = Y.shape
 
-    Y_hat = list()  # [(b_i, s, 3)]
+    Y_hat = list()  # [(b_i, s, o)]
     batch_losses = list()
     batch_sizes = list()
     i = 0
     while i < n:
-        X_batch = X[i:i + batch_size]  # (b, s, 9)
-        Y_batch = Y[i:i + batch_size]  # (b, s, 3)
+        X_batch = X[i:i + batch_size]  # (b, s, p)
+        Y_batch = Y[i:i + batch_size]  # (b, s, o)
         b = X_batch.shape[0]
 
-        Y_batch_hat = list()  # [(b, 3)]
+        Y_batch_hat = list()  # [(b, o)]
         losses = list()
         h0, c0 = None, None
         for t in range(seq_len):
             if optimizer is not None:
                 optimizer.zero_grad()
 
-            x_t = X_batch[:, t]  # (b, 9)
+            x_t = X_batch[:, t]  # (b, p)
             x_t = torch.tensor(x_t).to(device)
 
             if handle_blinks is not None and (x_t[0, 2] == 0.0 or x_t[0, 5] == 0.0):
                 if handle_blinks == 'noop':
                     if predict_relative_head:
-                        y_hat_t = torch.zeros((batch_size, 3), dtype=x_t.dtype).to(device)
+                        y_hat_t = torch.zeros((batch_size, dims_out), dtype=x_t.dtype).to(device)
                     else:
                         y_hat_t = x_t.detach().clone()
                 elif handle_blinks == 'repeat_last':
                     if len(Y_batch_hat) > 0:
-                        y_hat_t = torch.tensor(Y_batch_hat[-1])
+                        y_hat_t = torch.tensor(Y_batch_hat[-1]).to(device)
                     elif predict_relative_head:  # Fallback to `noop` rules when no previous prediction exists.
-                        y_hat_t = torch.zeros((batch_size, 3), dtype=x_t.dtype).to(device)
+                        y_hat_t = torch.zeros((batch_size, dims_out), dtype=x_t.dtype).to(device)
                     else:
                         y_hat_t = x_t.detach().clone()
                 else:
@@ -246,29 +348,29 @@ def _inference(model, X, Y, criterion, batch_size, device, predict_relative_head
                 kwargs = dict()
                 if h0 is not None and c0 is not None:
                     kwargs = {'h0': h0, 'c0': c0}
-                y_hat_t = model(x_t, **kwargs)  # (b, 3)
+                y_hat_t = model(x_t, **kwargs)  # (b, o)
                 if isinstance(y_hat_t, tuple):
-                    y_hat_t, hn, cn = y_hat_t  # (b, 3), (1, b, z), (1, b, z)
+                    y_hat_t, hn, cn = y_hat_t  # (b, o), (1, b, z), (1, b, z)
                     h0, c0 = hn.detach(), cn.detach()  # Use final hidden states as inputs to the next sequence.
 
-            y_t = torch.tensor(Y_batch[:, t]).to(device)  # (b, 3)
+            y_t = torch.tensor(Y_batch[:, t]).to(device)  # (b, o)
             loss = criterion(y_hat_t, y_t)
             losses.append(loss.detach().cpu().numpy())
 
-            Y_batch_hat.append(y_hat_t.detach().cpu().numpy())  # (b, 3)
+            Y_batch_hat.append(y_hat_t.detach().cpu().numpy())  # (b, h)
 
             if optimizer is not None:
                 loss.backward()
                 optimizer.step()
 
-        Y_batch_hat = [np.expand_dims(y_hat_t, axis=1) for y_hat_t in Y_batch_hat]  # [(b, 1, 3)]
-        Y_hat.append(np.stack(Y_batch_hat, axis=1))  # (b, s, 3)
+        Y_batch_hat = [np.expand_dims(y_hat_t, axis=1) for y_hat_t in Y_batch_hat]  # [(b, 1, o)]
+        Y_hat.append(np.stack(Y_batch_hat, axis=1))  # (b, s, o)
         batch_losses.append(np.mean(losses))
         batch_sizes.append(b)
 
         i += batch_size
 
-    Y_hat = np.concatenate(Y_hat, axis=0)  # (n, s, 3)
+    Y_hat = np.concatenate(Y_hat, axis=0)  # (n, s, o)
     return Y_hat, np.average(batch_losses, weights=batch_sizes)
 
 
