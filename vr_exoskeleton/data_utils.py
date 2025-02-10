@@ -8,8 +8,8 @@ PATH_DATA = 'data'
 PATH_SCORES = os.path.join(PATH_DATA, 'ScoreRecord.csv')
 
 TASK_NAMES = (
-    'ArcSmoothPursuit',
     'LinearSmoothPursuit',
+    'ArcSmoothPursuit',
     'RapidVisualSearch',
     'RapidVisualSearchAvoidance',
 )
@@ -18,12 +18,13 @@ N_TRIALS = 3
 SECONDS_PER_TRIAL = 90
 
 
-def get_user_task_paths(base_users_folder='Users', use_eye_tracker_frames=False, ignore_users=None):
+def get_user_task_paths(use_eye_tracker_frames=False, ignore_users=None):
     if ignore_users is None:
         ignore_users = set()
 
+    base_users_folder = 'Users'
     if not use_eye_tracker_frames:
-        _write_90hz_files_if_needed(base_users_folder)
+        _write_90hz_files_if_needed()
         base_users_folder += '_90hz'
     path_users = os.path.join(PATH_DATA, base_users_folder)
 
@@ -45,7 +46,8 @@ def get_user_task_paths(base_users_folder='Users', use_eye_tracker_frames=False,
         keys = user_task_paths[user].keys()
         if keys != keys0:
             raise ValueError(f'Not all tasks are the same among users: {user}:{keys} != {users[0]}:{keys0}')
-    tasks = sorted(list(keys0))
+    task_to_index = {task: i for i, task in enumerate(TASK_NAMES)}
+    tasks = sorted(list(keys0), key=lambda k: task_to_index[k])
     for user in users:
         for task in tasks:
             if len(user_task_paths[user][task]) != N_TRIALS:
@@ -53,11 +55,11 @@ def get_user_task_paths(base_users_folder='Users', use_eye_tracker_frames=False,
     return users, tasks, user_task_paths
 
 
-def _write_90hz_files_if_needed(base_users_folder):
-    path_users_90hz = os.path.join(PATH_DATA, base_users_folder + '_90hz')
+def _write_90hz_files_if_needed():
+    path_users_90hz = os.path.join(PATH_DATA, 'Users_90hz')
     os.makedirs(path_users_90hz, exist_ok=True)
 
-    users, tasks, user_task_paths = get_user_task_paths(base_users_folder=base_users_folder, use_eye_tracker_frames=True)
+    users, tasks, user_task_paths = get_user_task_paths(use_eye_tracker_frames=True)
     for user in users:
         path_user_90hz = os.path.join(path_users_90hz, user)
         os.makedirs(path_user_90hz, exist_ok=True)
@@ -80,7 +82,7 @@ def _write_90hz_files_if_needed(base_users_folder):
 def load_X_Y(
         paths,
         downsampling_rate=1,
-        interpolate_blinks=False,
+        allow_blinks=False,
 ):
     if downsampling_rate < 1:
         raise ValueError(f'Down-sample rate cannot be less than 1: {downsampling_rate:d}')
@@ -97,7 +99,7 @@ def load_X_Y(
         if all(row[2] == 0.0 and row[5] == 0.0 for row in data):
             continue
 
-        if interpolate_blinks:
+        if not allow_blinks:
             left, right = slice(0, 3), slice(3, 6)
             for side in (left, right):
                 data_side = data[:, side]

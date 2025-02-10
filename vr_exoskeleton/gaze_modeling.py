@@ -1,20 +1,19 @@
 import torch
 import torch.nn as nn
 
-DIMS_EYE = 6  # (x, y, z) of left and right eyes.
-DIMS_HEAD_DIRECTION = 3  # (x, y, z) direction of head.
+DIMS_EYE = 6  # (x, y, z) normalized direction of left and right eyes.
+DIMS_HEAD_DIRECTION = 3  # (x, y, z) normalized direction of head.
 DIMS_OUT_PITCH_YAW = 2  # Output: predict the pitch and yaw of the next direction.
 
 
 class GazeMLP(nn.Module):
 
-    def __init__(self, hidden_sizes=None, predict_relative_head=False):
+    def __init__(self, hidden_sizes=None):
         super(GazeMLP, self).__init__()
         if hidden_sizes is None:
             hidden_sizes = list()
 
         self.input_size = DIMS_EYE + DIMS_HEAD_DIRECTION
-        dims_out = DIMS_OUT_PITCH_YAW if predict_relative_head else DIMS_HEAD_DIRECTION
 
         self.net = nn.Sequential()
         in_dim = self.input_size
@@ -22,25 +21,24 @@ class GazeMLP(nn.Module):
             self.net.append(nn.Linear(in_dim, hidden_size))
             self.net.append(nn.ReLU())
             in_dim = hidden_size
-        self.net.append(nn.Linear(in_dim, dims_out))
+        self.net.append(nn.Linear(in_dim, DIMS_OUT_PITCH_YAW))
 
-    def forward(self, x):
-        return self.net(x)
+    def forward(self, x):  # (N, 9)
+        return self.net(x)  # (N, 2)
 
 
 class GazeLSTM(nn.Module):
 
-    def __init__(self, hidden_sizes=None, predict_relative_head=False):
+    def __init__(self, hidden_sizes=None):
         super(GazeLSTM, self).__init__()
         if hidden_sizes is None:
             hidden_sizes = list()
 
         self.input_size = DIMS_EYE + DIMS_HEAD_DIRECTION
-        dims_out = DIMS_OUT_PITCH_YAW if predict_relative_head else DIMS_HEAD_DIRECTION
 
         if len(hidden_sizes) == 0:
-            self.hidden_size = dims_out
-            self.lstm = nn.LSTM(self.input_size, dims_out)
+            self.hidden_size = DIMS_OUT_PITCH_YAW
+            self.lstm = nn.LSTM(self.input_size, DIMS_OUT_PITCH_YAW)
             self.net = None
         else:
             self.hidden_size = hidden_sizes[0]
@@ -51,7 +49,7 @@ class GazeLSTM(nn.Module):
                 self.net.append(nn.Linear(in_dim, hidden_size))
                 self.net.append(nn.ReLU())
                 in_dim = hidden_size
-            self.net.append(nn.Linear(in_dim, dims_out))
+            self.net.append(nn.Linear(in_dim, DIMS_OUT_PITCH_YAW))
 
     def forward(self, x, h0=None, c0=None):  # (N, 9), (1, N, H), (1, N, H)
         """
@@ -76,4 +74,4 @@ class GazeLSTM(nn.Module):
         else:
             y = self.net(x)
 
-        return y, hn, cn  # (N, 3), (1, N, H), (1, N, H)
+        return y, hn, cn  # (N, 2), (1, N, H), (1, N, H)

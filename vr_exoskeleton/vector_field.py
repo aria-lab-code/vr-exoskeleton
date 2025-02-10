@@ -1,5 +1,3 @@
-import os
-
 import matplotlib as mpl
 import numpy as np
 import torch
@@ -55,21 +53,21 @@ def predict_thetas(model, points, v_head, rng, sample=10, device=None):
     return point_to_theta
 
 
-def hist_thetas(point_to_theta, path_stamp=None):
+def hist_thetas(point_to_theta, path=None):
     thetas = [np.sqrt(theta_y ** 2 + theta_x ** 2) for theta_y, theta_x in point_to_theta.values()]
 
     plt.hist(thetas, bins=128)
     plt.title('Frequency of length of predicted head pitch/yaw')
     plt.ylabel('Length (as sqrt(th_y^2 + th_x^2)) of head pitch/yaw')
 
-    if path_stamp is not None:
-        plt.savefig(os.path.join(path_stamp, 'theta_hist.png'), bbox_inches='tight')
+    if path is not None:
+        plt.savefig(path, bbox_inches='tight')
     else:
         plt.show()
     plt.close()
 
 
-def plot_vector_field(point_to_theta, title=None, path_stamp=None):
+def plot_vector_field(point_to_theta, title=None, path=None):
     # https://matplotlib.org/stable/gallery/color/individual_colors_from_cmap.html
     cmaps = [mpl.colormaps[name] for name in ('Blues_r', 'Oranges_r', 'Greens_r', 'Purples_r')]
 
@@ -97,8 +95,8 @@ def plot_vector_field(point_to_theta, title=None, path_stamp=None):
     plt.ylabel('Y Left/Right Average')
     plt.xlabel('X Left/Right Average')
 
-    if path_stamp is not None:
-        plt.savefig(os.path.join(path_stamp, 'theta_vector_field.png'), bbox_inches='tight')
+    if path is not None:
+        plt.savefig(path, bbox_inches='tight')
     else:
         plt.show()
     plt.close()
