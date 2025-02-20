@@ -107,18 +107,19 @@ def train(
     # Load meta data.
     users, tasks, user_task_paths = data_utils.get_user_task_paths(use_eye_tracker_frames=use_eye_tracker_frames,
                                                                    ignore_users=ignore_users)
-    print(f'Total users: {len(users)}')
+    n_users = len(users)
+    print(f'Total users: {n_users}')
     if task_names_train is None:
         task_names_train = tasks
     print(f'Training tasks: {task_names_train}')
 
     # Shuffle and split data sets by user, then collect file paths.
-    perm = rng.permutation(len(users))  # Shuffle indices.
-    n_users_test = int(len(users) * test_ratio)
-    n_users_val = int((len(users) - n_users_test) * val_ratio)
+    perm = rng.permutation(n_users)  # Shuffle indices.
+    n_users_test = int(n_users * test_ratio)
+    n_users_val = int((n_users - n_users_test) * val_ratio)
     users_val = [users[i] for i in perm[:n_users_val]]
-    users_train = [users[i] for i in perm[n_users_val:-n_users_test]]
-    users_test = [users[i] for i in perm[-n_users_test:]]
+    users_train = [users[i] for i in perm[n_users_val:n_users - n_users_test]]
+    users_test = [users[i] for i in perm[n_users - n_users_test:]]
     print(f'Training with users ({len(users_train)}): {users_train}')
     print(f'Validating with users ({len(users_val)}): {users_val}')
     print(f'Evaluating with users ({len(users_test)}): {users_test}')
@@ -193,27 +194,26 @@ def train(
     del X_val
     del Y_val
 
-    # Evaluate.
-    print(f'Evaluating...')
-    losses_test = list()
-    for task in tasks:
-        paths_test = list()
-        for user in users_test:
-            paths_test.extend(user_task_paths[user][task])
-        X_test, Y_test = data_utils.load_X_Y(paths_test,
-                                             downsampling_rate=downsampling_rate,
-                                             allow_blinks=True)  # Assume presence of blinks during testing.
-        Y_test = to_pitch_yaw(X_test, Y_test)
-        criterion_test = torch.nn.MSELoss()
-        Y_test_hat, loss_test = _inference(model, X_test, Y_test, criterion_test, batch_size, device,
-                                           handle_blinks=handle_blinks_test)
-        losses_test.append(loss_test)
-        print(f'Loss on `{task}`: {loss_test:.8f}')
-    loss_test_mean = np.mean(losses_test)
-    print(f'Mean loss: {loss_test_mean:.8f}')
+    # Create visualizations.
+    print('Creating visualizations...')
+    points = list()
+    x_step, y_step = 0.01, 0.01
+    for y in range(-40, 21):
+        for x in range(-25, 26):
+            points.append((x * x_step, y * y_step))
+    point_to_theta = vector_field.predict_thetas(model, points, [0., 0., 1.], rng, sample=32, device=device)
+    vector_field.hist_thetas(point_to_theta, path=os.path.join(path_stamp, 'theta_hist.png'))
+    vector_field.plot_vector_field(
+        point_to_theta,
+        title='Function Estimation - {} ({})'.format(
+            model_type.upper(),
+            'All' if len(task_names_train) == 4 else ', '.join(task_names_train)
+        ),
+        path=os.path.join(path_stamp, 'theta_vector_field.png'))
 
-    # Log parameters and results.
-    with open(os.path.join(path_stamp, 'log.txt'), 'w') as fd:
+    # Log parameters.
+    path_log = os.path.join(path_stamp, 'log.txt')
+    with open(path_log, 'w') as fd:
         fd.write(f'stamp: {stamp}\n')
         fd.write('\n')
         fd.write('============\nPARAMETERS\n============\n')
@@ -242,28 +242,39 @@ def train(
         fd.write('train users ({:d}): {}\n'.format(len(users_train), ','.join(users_train)))
         fd.write('validation users ({:d}): {}\n'.format(len(users_val), ','.join(users_val)))
         fd.write('test users ({:d}): {}\n'.format(len(users_test), ','.join(users_test)))
-        fd.write('\n')
-        width_task = max(len(task) for task in tasks)
-        for task, loss_test in zip(tasks, losses_test):
-            fd.write('test loss for task {:>{w}}: {:.8f}\n'.format(task, loss_test, w=width_task))
-        fd.write(f'test loss mean: {loss_test_mean:.8f}\n')
 
-    # Create visualizations.
-    print('Creating visualizations...')
-    points = list()
-    x_step, y_step = 0.01, 0.01
-    for y in range(-40, 21):
-        for x in range(-25, 26):
-            points.append((x * x_step, y * y_step))
-    point_to_theta = vector_field.predict_thetas(model, points, [0., 0., 1.], rng, sample=32, device=device)
-    vector_field.hist_thetas(point_to_theta, path=os.path.join(path_stamp, 'theta_hist.png'))
-    vector_field.plot_vector_field(
-        point_to_theta,
-        title='Function Estimation - {} ({})'.format(
-            model_type.upper(),
-            'All' if len(task_names_train) == 4 else ', '.join(task_names_train)
-        ),
-        path=os.path.join(path_stamp, 'theta_vector_field.png'))
+    # Quit here if training only.
+    if len(users_test) == 0:
+        print('No test users! Skipping evaluation.')
+        return list(), list()
+
+    # Evaluate.
+    losses_test = list()
+    print(f'Evaluating...')
+    for task in tasks:
+        paths_test = list()
+        for user in users_test:
+            paths_test.extend(user_task_paths[user][task])
+        X_test, Y_test = data_utils.load_X_Y(paths_test,
+                                             downsampling_rate=downsampling_rate,
+                                             allow_blinks=True)  # Assume presence of blinks during testing.
+        Y_test = to_pitch_yaw(X_test, Y_test)
+        criterion_test = torch.nn.MSELoss()
+        Y_test_hat, loss_test = _inference(model, X_test, Y_test, criterion_test, batch_size, device,
+                                           handle_blinks=handle_blinks_test)
+        losses_test.append(loss_test)
+        print(f'Loss on `{task}`: {loss_test:.8f}')
+    loss_test_mean = np.mean(losses_test)
+    print(f'Mean loss: {loss_test_mean:.8f}')
+
+    # Log results.
+    with open(path_log, 'a') as fd:
+        if len(users_test) > 0:
+            fd.write('\n')
+            width_task = max(len(task) for task in tasks)
+            for task, loss_test in zip(tasks, losses_test):
+                fd.write('test loss for task {:>{w}}: {:.8f}\n'.format(task, loss_test, w=width_task))
+            fd.write(f'test loss mean: {loss_test_mean:.8f}\n')
 
     return losses_test + [loss_test_mean], tasks + ['All']
 

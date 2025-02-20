@@ -1,3 +1,5 @@
+from typing import Dict, Iterable, List, Tuple, Union
+
 import matplotlib as mpl
 import numpy as np
 import torch
@@ -6,12 +8,19 @@ from matplotlib import pyplot as plt
 from vr_exoskeleton import gaze_modeling
 
 # Below are calculated in the 'explore' notebook.
-EYE_DIFF_MEAN = [0.00727914, 0.00137031]
-EYE_DIFF_COV = [[7.67945083e-04, 4.95395192e-05],
-                [4.95395192e-05, 7.07410755e-04]]
+EYE_DIFF_MEAN = np.array([0.00727914, 0.00137031])
+EYE_DIFF_COV = np.array([[7.67945083e-04, 4.95395192e-05],
+                         [4.95395192e-05, 7.07410755e-04]])
 
 
-def predict_thetas(model, points, v_head, rng, sample=10, device=None):
+def predict_thetas(
+        model: torch.nn.Module,
+        points: Iterable[Tuple[float, float]],
+        v_head: Union[List[float], Tuple[float, float, float]],
+        rng: np.random.Generator,
+        sample: int = 10,
+        device=None
+) -> Dict[Tuple[float, float], np.ndarray]:
     if isinstance(v_head, list):
         v_head = np.array(v_head)
     V_head = np.zeros((sample, 3)) + v_head  # (n, 3)
@@ -53,7 +62,7 @@ def predict_thetas(model, points, v_head, rng, sample=10, device=None):
     return point_to_theta
 
 
-def hist_thetas(point_to_theta, path=None):
+def hist_thetas(point_to_theta: Dict[Tuple[float, float], np.ndarray], path: str = None):
     thetas = [np.sqrt(theta_y ** 2 + theta_x ** 2) for theta_y, theta_x in point_to_theta.values()]
 
     plt.hist(thetas, bins=128)
@@ -67,28 +76,30 @@ def hist_thetas(point_to_theta, path=None):
     plt.close()
 
 
-def plot_vector_field(point_to_theta, title=None, path=None):
-    # https://matplotlib.org/stable/gallery/color/individual_colors_from_cmap.html
-    cmaps = [mpl.colormaps[name] for name in ('Blues_r', 'Oranges_r', 'Greens_r', 'Purples_r')]
-
-    thetas = [np.sqrt(theta_y ** 2 + theta_x ** 2) for theta_y, theta_x in point_to_theta.values()]
-    theta_min = min(thetas)
-    theta_max = max(thetas)
+def plot_vector_field(
+        point_to_theta: Dict[Tuple[float, float], np.ndarray],
+        cmap_name: str = 'hsv',
+        title: str = None,
+        path: str = None
+):
+    # https://matplotlib.org/stable/gallery/color/colormap_reference.html
+    # Cyclic maps are: 'hsv', 'twilight', 'twilight_shifted'
+    cmap = mpl.colormaps[cmap_name]
 
     plt.figure(figsize=(9.0, 10.8))
     for (x, y), (theta_y, theta_x) in point_to_theta.items():
-        theta = np.sqrt(theta_y ** 2 + theta_x ** 2)
-        if theta_y > 0:
-            if theta_x > 0:
-                cmap = cmaps[0]
-            else:
-                cmap = cmaps[1]
+        # Select in colormap based on angle.
+        if theta_x == 0.0:
+            if theta_y == 0.0:
+                continue
+            index = 0.0 if theta_y < 0.0 else 0.5  # Straight up or down.
         else:
-            if theta_x > 0:
-                cmap = cmaps[2]
-            else:
-                cmap = cmaps[3]
-        color = cmap((theta - theta_min) / (theta_max - theta_min + 0.0001))
+            angle = np.arctan(theta_y / theta_x)  # In range (-pi/2, pi/2).
+            index = (angle / np.pi + 0.5) / 2  # Shift and scale to range (0, 1/2).
+            if theta_x < 0.0:
+                index += 0.5  # Force left half of plane to range (1/2, 1).
+        # https://matplotlib.org/stable/gallery/color/individual_colors_from_cmap.html
+        color = cmap(index)
         plt.arrow(x, y, -theta_x, theta_y, color=color)
     if title is not None:
         plt.title(title)
