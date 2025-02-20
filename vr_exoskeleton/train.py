@@ -12,12 +12,12 @@ from vr_exoskeleton import data_utils, gaze_modeling, spatial, vector_field
 
 def main():
     """
-    Only starts from the command line when this script is run using `python vr_exoskeleton/train.py ...`.
+    Only starts from the command line when this script is run using `python -m vr_exoskeleton.train ...`.
     """
     parser = argparse.ArgumentParser(
         description='Train a neural network on eye gaze and neck data.'
     )
-    parser.add_argument('model_type', choices=('mlp', 'lstm'),
+    parser.add_argument('model_type', type=str,
                         help='Model architecture.')
     parser.add_argument('--run_name', type=str,
                         help='Optional name to append to output directory.')

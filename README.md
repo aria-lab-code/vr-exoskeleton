@@ -46,7 +46,13 @@ unzip ~/Downloads/25749378.zip data
 Train a MLP model:
 
 ```commandline
-python vr-exoskeleton/train.py
+python -m vr_exoskeleton.train mlp --run_name my_run --seed 1
+```
+
+Train a LSTM model:
+
+```commandline
+python -m vr_exoskeleton.train lstm --run_name my_other_run --seed 2
 ```
 
 ## Export
@@ -54,7 +60,7 @@ python vr-exoskeleton/train.py
 Export the trained model to the [ONNX](https://pytorch.org/docs/stable/onnx.html) format:
 
 ```commandline
-python vr-exoskeleton/export.py
+python vr_exoskeleton/export.py
 ```
 
 You can check that the model exported with proper dimensions and input/output layer names via [Netron](https://netron.app).
