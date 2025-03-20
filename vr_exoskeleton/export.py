@@ -10,7 +10,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Export a saved (trained) model to the ONNX format.'
     )
-    parser.add_argument('model_type', choices=('mlp', 'lstm'),
+    parser.add_argument('model_type', type=str,
                         help='Model architecture.')
     parser.add_argument('path',
                         help='Path to `.pth` file.')
@@ -36,6 +36,11 @@ def export(model_type, path, hidden_sizes=None):
                   torch.zeros(1, 1, model.hidden_size))
         input_names = ('input', 'h0', 'c0')
         output_names = ('output', 'hn', 'cn')
+    elif model_type == 'vector-p':
+        model = gaze_modeling.GazeVectorParameterized()
+        inputs = torch.zeros(1, 9)
+        input_names = ('input',)
+        output_names = ('output',)
     else:
         raise ValueError(f'Unknown `model_type`: {model_type}')
 

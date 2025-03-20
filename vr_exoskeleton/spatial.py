@@ -51,8 +51,10 @@ def main():
     assert np.isclose(to_pitch([[0., 1., 1.]], [[0., 0., 1.]])[0], -np.pi / 4)
     assert np.isclose(to_pitch([[0., -1., 1.]], [[0., 0., 1.]])[0], np.pi / 4)
 
-    assert np.isclose(to_yaw([[0., 0., 1.]], [[1, 0., np.sqrt(3)]])[0], -np.pi / 6)
-    assert np.isclose(to_yaw([[0., 0., 1.]], [[-1, 0., np.sqrt(3)]])[0], np.pi / 6)
+    assert np.isclose(to_yaw([[0., 0., 1.]], [[1., 0., np.sqrt(3)]])[0], -np.pi / 6)
+    assert np.isclose(to_yaw([[0., 0., 1.]], [[-1., 0., np.sqrt(3)]])[0], np.pi / 6)
+    assert np.isclose(to_yaw([[1., 0., np.sqrt(3)]], [[-1., 0., np.sqrt(3)]])[0], np.pi / 3)
+    assert np.isclose(to_yaw([[-np.sqrt(3), 0, 1.]], [[1., 0., np.sqrt(3)]])[0], -np.pi / 2)
 
     assert np.isclose(to_angle_difference([[0., 0., 1.]], [[0., 0., 1.]])[0], 0.)
     assert np.isclose(to_angle_difference([[0., 0., 1.]], [[1., 0., 0.]])[0], np.pi / 2)

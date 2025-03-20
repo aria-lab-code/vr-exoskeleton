@@ -8,25 +8,15 @@ To create a virtual environment and install dependencies from pip:
 
 ```commandline
 python -m venv venv
-```
-
-On Mac/Linux:
-```commandline
 source venv/bin/activate
 pip install -r requirements.txt
+python -m ipykernel install --user --name=vr-exoskeleton
 ```
 
-On Windows:
+On Windows, instead activate the environment (the second line above) by:
+
 ```commandline
 venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-To also run/edit the IPython notebooks (the second command installs an IPython kernel profile based on this virtual environment):
-
-```commandline
-pip install -r requirements-nb.txt
-python -m ipykernel install --user --name=vr-exoskeleton
 ```
 
 ## Download Data

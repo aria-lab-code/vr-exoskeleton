@@ -88,6 +88,10 @@ def train(
         model = gaze_modeling.GazeMLP(hidden_sizes=hidden_sizes)
     elif model_type == 'lstm':
         model = gaze_modeling.GazeLSTM(hidden_sizes=hidden_sizes)
+    elif model_type == 'vector':
+        model = gaze_modeling.GazeVectorBaseline()
+    elif model_type == 'vector-p':
+        model = gaze_modeling.GazeVectorParameterized()
     else:
         raise ValueError(f'Unknown `model_type`: {model_type}')
 
@@ -96,7 +100,7 @@ def train(
         stamp += '_' + run_name
     if seed is not None:
         stamp += '_s' + str(seed)
-    path_stamp = os.path.join('output', stamp)
+    path_stamp = os.path.join('output', 'runs', stamp)
     os.makedirs(path_stamp, exist_ok=True)
     print(f'Saving to: {path_stamp}')
 
@@ -151,43 +155,44 @@ def train(
     print(f'Using device: {device}')
 
     # Train.
-    criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    losses_train = list()
-    losses_val = list()
-    loss_val_min = None
-    path_val_best = os.path.join(path_stamp, 'val_best.pth')
-    early_stopping_counter = 0
-    for epoch in range(epochs):
-        order = rng.permutation(X_train.shape[0])  # Shuffle.
-        X_train_, Y_train_ = X_train[order], Y_train[order]
-        _, loss_train = _inference(model, X_train_, Y_train_, criterion, batch_size, device, optimizer=optimizer)
-        losses_train.append(loss_train)
-        _, loss_val = _inference(model, X_val, Y_val, criterion, batch_size, device)
-        losses_val.append(loss_val)
-        print(f'Epoch: {epoch: >3d}; train loss: {loss_train:.8f}; val loss: {loss_val:.8f}')
+    if type(model) is not gaze_modeling.GazeVectorBaseline:
+        criterion = torch.nn.MSELoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        losses_train = list()
+        losses_val = list()
+        loss_val_min = None
+        path_val_best = os.path.join(path_stamp, 'val_best.pth')
+        early_stopping_counter = 0
+        for epoch in range(epochs):
+            order = rng.permutation(X_train.shape[0])  # Shuffle.
+            X_train_, Y_train_ = X_train[order], Y_train[order]
+            _, loss_train = _inference(model, X_train_, Y_train_, criterion, batch_size, device, optimizer=optimizer)
+            losses_train.append(loss_train)
+            _, loss_val = _inference(model, X_val, Y_val, criterion, batch_size, device)
+            losses_val.append(loss_val)
+            print(f'Epoch: {epoch: >3d}; train loss: {loss_train:.8f}; val loss: {loss_val:.8f}')
 
-        if loss_val_min is None or loss_val < loss_val_min:
-            loss_val_min = loss_val
-            early_stopping_counter = 0
-            torch.save(model.state_dict(), path_val_best)
-        else:
-            early_stopping_counter += 1
-            if early_stopping_counter == early_stopping_patience:
-                break
+            if loss_val_min is None or loss_val < loss_val_min:
+                loss_val_min = loss_val
+                early_stopping_counter = 0
+                torch.save(model.state_dict(), path_val_best)
+            else:
+                early_stopping_counter += 1
+                if early_stopping_counter == early_stopping_patience:
+                    break
 
-    # Plot training loss.
-    plt.plot(list(range(len(losses_train))), losses_train, label='Train')
-    plt.plot(list(range(len(losses_val))), losses_val, label='Val')
-    plt.title('Training Loss - {} ({})'.format(
-        model_type.upper(),
-        'All' if len(task_names_train) == 4 else ', '.join(task_names_train)
-    ))
-    plt.ylabel('MSE')
-    plt.xlabel('Epoch')
-    plt.legend()
-    plt.savefig(os.path.join(path_stamp, 'loss.png'), bbox_inches='tight')
-    plt.close()
+        # Plot training loss.
+        plt.plot(list(range(len(losses_train))), losses_train, label='Train')
+        plt.plot(list(range(len(losses_val))), losses_val, label='Val')
+        plt.title('Training Loss - {} ({})'.format(
+            model_type.upper(),
+            'All' if len(task_names_train) == 4 else ', '.join(task_names_train)
+        ))
+        plt.ylabel('MSE')
+        plt.xlabel('Epoch')
+        plt.legend()
+        plt.savefig(os.path.join(path_stamp, 'loss.png'), bbox_inches='tight')
+        plt.close()
 
     del X_train
     del Y_train
