@@ -21,9 +21,6 @@ def main():
 
 
 def export(model_type, path, hidden_sizes=None):
-    if hidden_sizes is None:
-        hidden_sizes = list()
-
     if model_type == 'mlp':
         model = gaze_modeling.GazeMLP(hidden_sizes=hidden_sizes)
         inputs = torch.zeros(1, model.input_size)

@@ -35,6 +35,8 @@ def main():
                         help='List of user IDs to ignore. (User21 has a weird frame-rate for the second task.)')
     parser.add_argument('--task_names_train', nargs='+',
                         help='Name of the specific task(s) chosen for training.')
+    parser.add_argument('--keep_negated_head_x', action='store_true',
+                        help='Flag to maintain originally collected negated x-axis of head direction vector.')
     parser.add_argument('--downsampling_rate', default=1, type=int,
                         help='Rate by which data points will be down-sampled from the actual rate of 90Hz or 120Hz.')
     parser.add_argument('--allow_blinks_train', action='store_true',
@@ -66,6 +68,7 @@ def train(
         use_eye_tracker_frames: bool = False,
         ignore_users: Optional[Union[List, Set]] = None,
         task_names_train: Optional[List] = None,
+        keep_negated_head_x: bool = False,
         downsampling_rate: int = 1,
         allow_blinks_train: bool = False,
         handle_blinks_test: Optional[str] = 'repeat_last',
@@ -138,12 +141,13 @@ def train(
     # Read training files, create data set.
     kwargs_train = {
         'downsampling_rate': downsampling_rate,
+        'keep_negated_head_x': keep_negated_head_x,
         'allow_blinks': allow_blinks_train,
     }
     X_train, Y_train = data_utils.load_X_Y(paths_train, **kwargs_train)
     X_val, Y_val = data_utils.load_X_Y(paths_val, **kwargs_train)
-    Y_train = to_pitch_yaw(X_train, Y_train)
-    Y_val = to_pitch_yaw(X_val, Y_val)
+    Y_train = to_increment_pitch_yaw(X_train, Y_train)
+    Y_val = to_increment_pitch_yaw(X_val, Y_val)
     print(f'X_train.shape: {X_train.shape}; Y_train.shape: {Y_train.shape}')
     print(f'X_val.shape: {X_val.shape}; Y_val.shape: {Y_val.shape}')
 
@@ -203,9 +207,9 @@ def train(
     print('Creating visualizations...')
     points = list()
     x_step, y_step = 0.01, 0.01
-    for y in range(-40, 21):
-        for x in range(-25, 26):
-            points.append((x * x_step, y * y_step))
+    for j in range(-40, 21):
+        for i in range(-25, 26):
+            points.append((i * x_step, j * y_step))
     point_to_theta = vector_field.predict_thetas(model, points, [0., 0., 1.], rng, sample=32, device=device)
     vector_field.hist_thetas(point_to_theta, path=os.path.join(path_stamp, 'theta_hist.png'))
     vector_field.plot_vector_field(
@@ -262,8 +266,9 @@ def train(
             paths_test.extend(user_task_paths[user][task])
         X_test, Y_test = data_utils.load_X_Y(paths_test,
                                              downsampling_rate=downsampling_rate,
+                                             keep_negated_head_x=keep_negated_head_x,
                                              allow_blinks=True)  # Assume presence of blinks during testing.
-        Y_test = to_pitch_yaw(X_test, Y_test)
+        Y_test = to_increment_pitch_yaw(X_test, Y_test)
         criterion_test = torch.nn.MSELoss()
         Y_test_hat, loss_test = _inference(model, X_test, Y_test, criterion_test, batch_size, device,
                                            handle_blinks=handle_blinks_test)
@@ -284,12 +289,12 @@ def train(
     return losses_test + [loss_test_mean], tasks + ['All']
 
 
-def to_pitch_yaw(X, Y):
-    pitch_yaw = np.zeros((Y.shape[0], Y.shape[1], 2), dtype=Y.dtype)  # (n, s, 2)
-    for i, (v, v_next) in enumerate(zip(X[:, :, -3:], Y)):
-        pitch_yaw[i][:, 0] = spatial.to_pitch(v, v_next)
-        pitch_yaw[i][:, 1] = spatial.to_yaw(v, v_next)
-    return pitch_yaw
+def to_increment_pitch_yaw(X, Y):
+    increment_pitch_yaw = np.zeros((Y.shape[0], Y.shape[1], 2), dtype=Y.dtype)  # (n, s, 2)
+    for i, (v, v_next) in enumerate(zip(X[:, :, 6:9], Y)):
+        increment_pitch_yaw[i][:, 0] = spatial.angle_pitch(v_next) - spatial.angle_pitch(v)
+        increment_pitch_yaw[i][:, 1] = spatial.angle_yaw(v_next) - spatial.angle_yaw(v)
+    return increment_pitch_yaw
 
 
 def _inference(model, X, Y, criterion, batch_size, device, handle_blinks=None, optimizer=None):

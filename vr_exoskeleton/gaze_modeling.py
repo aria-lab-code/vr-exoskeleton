@@ -84,36 +84,35 @@ class GazeVectorBaseline(nn.Module):
     def __init__(self, dead_zone_deg=5.0):
         super(GazeVectorBaseline, self).__init__()
         self.dead_zone_deg = dead_zone_deg
+        # Slope of asymptote - how much the head should rotate as a function of distance from the forward gaze.
+        self.v_pitch = torch.tensor(1.0)
         # 'Steepness' - the speed at which the dead zone tapers off.
         self.a_pitch = torch.tensor(2.0)
         # Soft inflection point of the dead zone.
         self.b_pitch = torch.tensor(dead_zone_deg * math.pi / 180.0)  # Convert to radians.
         # Vertical shift.
         self.c_pitch = torch.asin(torch.tensor(-0.08))  # Start aiming a little below the center.
-        # Slope of asymptote - how much the head should rotate as a function of distance from the forward gaze.
-        self.v_pitch = torch.tensor(1.0)
 
+        self.v_yaw = torch.tensor(1.0)
         self.a_yaw = torch.tensor(2.0)
         self.b_yaw = torch.tensor(dead_zone_deg * math.pi / 180.0)
         self.c_yaw = torch.tensor(0.0)  # Horizontal shift.
-        self.v_yaw = torch.tensor(1.0)
 
     def forward(self, x):  # (N, 9)
         # Head angle (x[:, 6:9]) is ignored.
 
         # Calculate combined, normalized gaze.
-        g = x[:, :3] + x[:, 3:6]  # (N, 3)
+        g = x[:, 0:3] + x[:, 3:6]  # (N, 3)
         g /= torch.unsqueeze(torch.linalg.norm(g, dim=1), 1)
 
-        z_sq = g[:, 2] ** 2
-        norm_pitch = torch.sqrt(g[:, 1] ** 2 + z_sq)  # (N)
-        pitch = torch.asin(g[:, 1] / norm_pitch)
-        norm_yaw = torch.sqrt(g[:, 0] ** 2 + z_sq)  # (N)
-        yaw = torch.acos(g[:, 0] / norm_yaw) - torch.pi / 2
+        pitch = torch.atan(g[:, 1] / g[:, 2]) - self.c_pitch
+        sign_pitch = torch.sign(pitch)
+        yaw = torch.atan(g[:, 0] / g[:, 2]) - self.c_yaw
+        sign_yaw = torch.sign(yaw)
 
-        pitch = dead_zone(pitch - self.c_pitch, self.a_pitch, self.b_pitch, self.v_pitch)
-        yaw = dead_zone(yaw - self.c_yaw, self.a_yaw, self.b_yaw, self.v_yaw)
-        return torch.stack([pitch, yaw], dim=1)  # (N, 2)
+        pitch = soft_dead_zone(torch.abs(pitch), self.v_pitch, self.a_pitch, self.b_pitch)
+        yaw = soft_dead_zone(torch.abs(yaw), self.v_yaw, self.a_yaw, self.b_yaw)
+        return torch.stack([pitch * sign_pitch, yaw * sign_yaw], dim=1)  # (N, 2)
 
 
 class GazeVectorParameterized(GazeVectorBaseline):
@@ -123,17 +122,17 @@ class GazeVectorParameterized(GazeVectorBaseline):
 
     def __init__(self, dead_zone_deg=5.0):
         super(GazeVectorParameterized, self).__init__(dead_zone_deg=dead_zone_deg)
+        self.v_pitch = torch.nn.Parameter(self.v_pitch)
         self.a_pitch = torch.nn.Parameter(self.a_pitch)
         self.b_pitch = torch.nn.Parameter(self.b_pitch)
         self.c_pitch = torch.nn.Parameter(self.c_pitch)
-        self.v_pitch = torch.nn.Parameter(self.v_pitch)
+        self.v_yaw = torch.nn.Parameter(self.v_yaw)
         self.a_yaw = torch.nn.Parameter(self.a_yaw)
         self.b_yaw = torch.nn.Parameter(self.b_yaw)
         self.c_yaw = torch.nn.Parameter(self.c_yaw)
-        self.v_yaw = torch.nn.Parameter(self.v_yaw)
 
 
-def dead_zone(x, a, b, v):
+def soft_dead_zone(x, v, a, b):
     """
     Apply a soft dead zone (i.e., halt movement) with radius `b` to the predicted angular change.
     """
@@ -142,3 +141,11 @@ def dead_zone(x, a, b, v):
     # Inflects at x=b.
     # As `a` increases, the faster the inflection occurs.
     return v * x / (1 + torch.e ** (a * (-x + b)))
+
+
+def main():
+    pass
+
+
+if __name__ == '__main__':
+    main()

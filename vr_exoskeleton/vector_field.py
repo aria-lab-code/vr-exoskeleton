@@ -100,7 +100,7 @@ def plot_vector_field(
                 index += 0.5  # Force left half of plane to range (1/2, 1).
         # https://matplotlib.org/stable/gallery/color/individual_colors_from_cmap.html
         color = cmap(index)
-        plt.arrow(x, y, -theta_x, theta_y, color=color)
+        plt.arrow(x, y, theta_x, theta_y, color=color)
     if title is not None:
         plt.title(title)
     plt.ylabel('Y Left/Right Average')

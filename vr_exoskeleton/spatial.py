@@ -2,26 +2,16 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
-def to_pitch(a_v1, a_v2):
-    if isinstance(a_v1, list):
-        a_v1 = np.array(a_v1)
-    if isinstance(a_v2, list):
-        a_v2 = np.array(a_v2)
-    norm1 = np.sqrt(a_v1[:, 1] ** 2 + a_v1[:, 2] ** 2)
-    norm2 = np.sqrt(a_v2[:, 1] ** 2 + a_v2[:, 2] ** 2)
-    return np.arcsin(a_v2[:, 1] / norm2) - np.arcsin(a_v1[:, 1] / norm1)
-    # return np.arccos(a_v2[:, 2] / norm2) - np.arccos(a_v1[:, 2] / norm1)
+def angle_pitch(a_v3):
+    if isinstance(a_v3, list):
+        a_v3 = np.array(a_v3)
+    return np.arctan(a_v3[:, 1] / a_v3[:, 2])  # y / z
 
 
-def to_yaw(a_v1, a_v2):
-    if isinstance(a_v1, list):
-        a_v1 = np.array(a_v1)
-    if isinstance(a_v2, list):
-        a_v2 = np.array(a_v2)
-    norm1 = np.sqrt(a_v1[:, 0] ** 2 + a_v1[:, 2] ** 2)
-    norm2 = np.sqrt(a_v2[:, 0] ** 2 + a_v2[:, 2] ** 2)
-    return np.arccos(a_v2[:, 0] / norm2) - np.arccos(a_v1[:, 0] / norm1)
-    # return np.arcsin(a_v2[:, 2] / norm2) - np.arcsin(a_v1[:, 2] / norm1)
+def angle_yaw(a_v3):
+    if isinstance(a_v3, list):
+        a_v3 = np.array(a_v3)
+    return np.arctan(a_v3[:, 0] / a_v3[:, 2])  # x / z
 
 
 def to_angle_difference(a_v1, a_v2):
@@ -48,13 +38,15 @@ def to_rotation_difference(a_quat1, a_quat2):
 
 
 def main():
-    assert np.isclose(to_pitch([[0., 1., 1.]], [[0., 0., 1.]])[0], -np.pi / 4)
-    assert np.isclose(to_pitch([[0., -1., 1.]], [[0., 0., 1.]])[0], np.pi / 4)
+    assert np.isclose(angle_pitch([[0., 0., 1.]])[0], 0)
+    assert np.isclose(angle_pitch([[0., 1., 1.]])[0], np.pi / 4)
+    assert np.isclose(angle_pitch([[0., -1., 1.]])[0], -np.pi / 4)
 
-    assert np.isclose(to_yaw([[0., 0., 1.]], [[1., 0., np.sqrt(3)]])[0], -np.pi / 6)
-    assert np.isclose(to_yaw([[0., 0., 1.]], [[-1., 0., np.sqrt(3)]])[0], np.pi / 6)
-    assert np.isclose(to_yaw([[1., 0., np.sqrt(3)]], [[-1., 0., np.sqrt(3)]])[0], np.pi / 3)
-    assert np.isclose(to_yaw([[-np.sqrt(3), 0, 1.]], [[1., 0., np.sqrt(3)]])[0], -np.pi / 2)
+    assert np.isclose(angle_yaw([[0., 0., 1.]])[0], 0)
+    assert np.isclose(angle_yaw([[1., 0., np.sqrt(3)]])[0], np.pi / 3)
+    assert np.isclose(angle_yaw([[0., 0., 1.]], [[-1., 0., np.sqrt(3)]])[0], np.pi / 6)
+    assert np.isclose(angle_yaw([[1., 0., np.sqrt(3)]], [[-1., 0., np.sqrt(3)]])[0], np.pi / 3)
+    assert np.isclose(angle_yaw([[-np.sqrt(3), 0, 1.]], [[1., 0., np.sqrt(3)]])[0], -np.pi / 2)
 
     assert np.isclose(to_angle_difference([[0., 0., 1.]], [[0., 0., 1.]])[0], 0.)
     assert np.isclose(to_angle_difference([[0., 0., 1.]], [[1., 0., 0.]])[0], np.pi / 2)
