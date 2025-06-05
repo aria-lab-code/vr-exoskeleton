@@ -35,8 +35,8 @@ def main():
                         help='List of user IDs to ignore. (User21 has a weird frame-rate for the second task.)')
     parser.add_argument('--task_names_train', nargs='+',
                         help='Name of the specific task(s) chosen for training.')
-    parser.add_argument('--keep_negated_head_x', action='store_true',
-                        help='Flag to maintain originally collected negated x-axis of head direction vector.')
+    parser.add_argument('--x_right_handed', action='store_true',
+                        help='Flag to make x-axis increase to the left when facing forward.')
     parser.add_argument('--downsampling_rate', default=1, type=int,
                         help='Rate by which data points will be down-sampled from the actual rate of 90Hz or 120Hz.')
     parser.add_argument('--allow_blinks_train', action='store_true',
@@ -68,7 +68,7 @@ def train(
         use_eye_tracker_frames: bool = False,
         ignore_users: Optional[Union[List, Set]] = None,
         task_names_train: Optional[List] = None,
-        keep_negated_head_x: bool = False,
+        x_right_handed: bool = False,
         downsampling_rate: int = 1,
         allow_blinks_train: bool = False,
         handle_blinks_test: Optional[str] = 'repeat_last',
@@ -141,7 +141,7 @@ def train(
     # Read training files, create data set.
     kwargs_train = {
         'downsampling_rate': downsampling_rate,
-        'keep_negated_head_x': keep_negated_head_x,
+        'x_right_handed': x_right_handed,
         'allow_blinks': allow_blinks_train,
     }
     X_train, Y_train = data_utils.load_X_Y(paths_train, **kwargs_train)
@@ -266,7 +266,7 @@ def train(
             paths_test.extend(user_task_paths[user][task])
         X_test, Y_test = data_utils.load_X_Y(paths_test,
                                              downsampling_rate=downsampling_rate,
-                                             keep_negated_head_x=keep_negated_head_x,
+                                             x_right_handed=x_right_handed,
                                              allow_blinks=True)  # Assume presence of blinks during testing.
         Y_test = to_increment_pitch_yaw(X_test, Y_test)
         criterion_test = torch.nn.MSELoss()

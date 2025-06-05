@@ -100,7 +100,7 @@ def _write_90hz_files_if_needed(base_users_folder):
 def load_X_Y(
         paths,
         downsampling_rate=1,
-        keep_negated_head_x=False,
+        x_right_handed=False,
         allow_blinks=False,
 ):
     if downsampling_rate < 1:
@@ -114,7 +114,7 @@ def load_X_Y(
         data = df.to_numpy().astype(np.float32)
         n = data.shape[0]
 
-        if not keep_negated_head_x:
+        if not x_right_handed:
             data[:, 0] = -data[:, 0]
             data[:, 3] = -data[:, 3]
             data[:, 6] = -data[:, 6]
